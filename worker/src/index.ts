@@ -6,7 +6,7 @@ export interface Env {
   API_TOKEN: string;
 }
 
-const app = new Hono<{ Bindings: Env }>();
+export const app = new Hono<{ Bindings: Env }>();
 
 app.get("/health", (c) =>
   c.json({ ok: true, service: "kontu", ts: new Date().toISOString() }),
