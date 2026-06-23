@@ -3,6 +3,8 @@
 mod config;
 mod cost;
 mod logging;
+mod models;
+mod risk;
 
 fn main() -> anyhow::Result<()> {
     let _log_guard = logging::init()?;
