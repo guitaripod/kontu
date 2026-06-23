@@ -1,9 +1,22 @@
 //! Shared data shapes mirroring the Worker API / D1 schema (see `SPEC.md` §5/§6).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::cost::HeatingType;
 use crate::risk::RiskInput;
+
+/// Accept a SQLite-style boolean: JSON `true/false`, integer `0/1`, or null.
+fn de_opt_bool<'de, D>(d: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(match v {
+        Some(serde_json::Value::Bool(b)) => Some(b),
+        Some(serde_json::Value::Number(n)) => Some(n.as_i64().map(|i| i != 0).unwrap_or(false)),
+        _ => None,
+    })
+}
 
 /// One portal listing as served by `/api/listings`. Most fields are optional
 /// because source data is sparse and drifts.
@@ -90,7 +103,7 @@ pub struct Listing {
     pub lease_end_year: Option<i32>,
     #[serde(default)]
     pub shore: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_bool")]
     pub shore_sauna: Option<bool>,
 
     #[serde(default)]

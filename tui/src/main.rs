@@ -8,6 +8,9 @@ mod cost;
 mod format;
 mod logging;
 mod models;
+mod probe;
+#[cfg(test)]
+mod render_smoke;
 mod risk;
 mod theme;
 mod tui;
@@ -19,9 +22,13 @@ use anyhow::Result;
 async fn main() -> Result<()> {
     let _log_guard = logging::init()?;
     let config = config::Config::load()?;
-    tracing::info!(server = %config.server_url, "kontu starting");
-
     let client = api::KontuClient::new(config.server_url.clone(), config.api_token.clone())?;
+
+    if std::env::args().any(|a| a == "--probe") {
+        return probe::run(&client).await;
+    }
+
+    tracing::info!(server = %config.server_url, "kontu starting");
     let mut app = app::App::new(client, &config);
 
     let mut tui = tui::Tui::new()?;

@@ -37,17 +37,34 @@ impl Config {
         Ok(Self::project_dirs()?.config_dir().join("config.toml"))
     }
 
-    /// Load config, creating a default file on first run.
+    /// Load config, creating a default file on first run. `KONTU_SERVER_URL` and
+    /// `KONTU_API_TOKEN` environment variables override the file when set.
     pub fn load() -> Result<Self> {
         let path = Self::config_path()?;
-        if !path.exists() {
+        let mut cfg = if !path.exists() {
             let cfg = Self::default();
             cfg.save()?;
-            return Ok(cfg);
+            cfg
+        } else {
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?
+        };
+        cfg.apply_env_overrides();
+        Ok(cfg)
+    }
+
+    fn apply_env_overrides(&mut self) {
+        if let Ok(v) = std::env::var("KONTU_SERVER_URL") {
+            if !v.is_empty() {
+                self.server_url = v;
+            }
         }
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+        if let Ok(v) = std::env::var("KONTU_API_TOKEN") {
+            if !v.is_empty() {
+                self.api_token = v;
+            }
+        }
     }
 
     pub fn save(&self) -> Result<()> {

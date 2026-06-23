@@ -1541,6 +1541,7 @@ dependencies = [
  "directories",
  "futures",
  "fuzzy-matcher",
+ "image",
  "open",
  "ratatui",
  "ratatui-image",
