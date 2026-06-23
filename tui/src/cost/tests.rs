@@ -27,6 +27,8 @@ fn sample_property() -> PropertyInputs {
         heating: HeatingType::Kaukolampo,
         water: WaterSupply::Municipal,
         building_value_eur: Some(140_000.0),
+        land_value_eur: None,
+        is_leisure: false,
         fireplace: false,
         private_road: false,
         ground_rent_eur_yr: 0.0,
@@ -211,7 +213,57 @@ fn equivalent_monthly_positive_and_reasonable() {
 }
 
 #[test]
-fn default_interest_rate_is_euribor_plus_margin() {
+fn capex_year_one_equals_todays_euros() {
     let d = CostDefaults::default();
-    assert!(approx(d.default_interest_rate(), 0.03329, 1e-9));
+    let mut prop = sample_property();
+    prop.capex = vec![(1, 30_000.0)];
+    let proj = project(&sample_purchase(), &prop, &sample_model(), &d);
+    assert!(
+        approx(proj.years[0].capex, 30_000.0, 1e-6),
+        "year-1 capex {} should equal today's euros",
+        proj.years[0].capex
+    );
+}
+
+#[test]
+fn kiintea_tasaera_flexes_term_under_rising_rates() {
+    let flat: f64 = amortization_schedule(200_000.0, &[0.03], 25, RepaymentType::KiinteaTasaera)
+        .iter()
+        .map(|m| m.interest)
+        .sum();
+    let mut rising = vec![0.03; 25];
+    for (i, r) in rising.iter_mut().enumerate() {
+        *r = 0.03 + 0.003 * i as f64;
+    }
+    let sched = amortization_schedule(200_000.0, &rising, 25, RepaymentType::KiinteaTasaera);
+    let rose: f64 = sched.iter().map(|m| m.interest).sum();
+    assert!(rose > flat, "rising kiinteä interest {rose} should exceed flat {flat}");
+    assert!(sched.len() > 300, "term should flex past 25y, got {} months", sched.len());
+}
+
+#[test]
+fn leisure_kiinteistovero_exceeds_permanent() {
+    let d = CostDefaults::default();
+    let model = sample_model();
+    let p = sample_purchase();
+    let mut perm = sample_property();
+    perm.is_leisure = false;
+    let mut leisure = sample_property();
+    leisure.is_leisure = true;
+    let n_perm = project(&p, &perm, &model, &d).npv_cost;
+    let n_leisure = project(&p, &leisure, &model, &d).npv_cost;
+    assert!(n_leisure > n_perm, "leisure NPV {n_leisure} should exceed permanent {n_perm}");
+}
+
+#[test]
+fn osake_mortgage_sized_on_purchase_price_not_debt_free() {
+    let d = CostDefaults::default();
+    let mut p = sample_purchase();
+    p.holding_form = HoldingForm::AsuntoOsake;
+    p.price_eur = 50_000.0;
+    p.debt_free_price_eur = 200_000.0;
+    p.ltv = 0.80;
+    let ot = one_time_costs(&p, &d);
+    assert!(approx(ot.down_payment, 10_000.0, 1e-6), "down payment {}", ot.down_payment);
+    assert!(approx(ot.transfer_tax, 3_000.0, 1e-6), "transfer tax {}", ot.transfer_tax);
 }

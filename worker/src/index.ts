@@ -16,6 +16,14 @@ app.get("/health", (c) =>
   c.json({ ok: true, service: "kontu", ts: new Date().toISOString() }),
 );
 
+app.use("/api/*", async (c, next) => {
+  const token = c.req.header("Authorization")?.replace(/^Bearer\s+/i, "");
+  if (!token || token !== c.env.API_TOKEN) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+  await next();
+});
+
 app.get("/api/photos/:key{.+}", async (c) => {
   const key = c.req.param("key");
   const object = await c.env.PHOTOS.get(key);
@@ -25,14 +33,6 @@ app.get("/api/photos/:key{.+}", async (c) => {
   headers.set("etag", object.httpEtag);
   headers.set("Cache-Control", "public, max-age=31536000, immutable");
   return new Response(object.body, { headers });
-});
-
-app.use("/api/*", async (c, next) => {
-  const token = c.req.header("Authorization")?.replace(/^Bearer\s+/i, "");
-  if (!token || token !== c.env.API_TOKEN) {
-    return c.json({ error: "unauthorized" }, 401);
-  }
-  await next();
 });
 
 app.route("/api", api);

@@ -11,7 +11,9 @@ pub enum HeatingType {
     Oljy,
     Sahko,
     Puu,
-    IlmaLampopumppu,
+    /// Air-to-water heat pump (ilmavesilämpöpumppu). A bare air-to-air ILP is
+    /// not a primary system and maps to `Sahko` instead.
+    Ivlp,
 }
 
 /// Water/sewer arrangement.
@@ -29,7 +31,7 @@ impl HeatingType {
             HeatingType::Oljy => d.heating_oljy_eur_yr,
             HeatingType::Sahko => d.heating_sahko_eur_yr,
             HeatingType::Puu => d.heating_puu_eur_yr,
-            HeatingType::IlmaLampopumppu => d.heating_ilmalampopumppu_eur_yr,
+            HeatingType::Ivlp => d.heating_ivlp_eur_yr,
         }
     }
 
@@ -64,13 +66,10 @@ pub fn recurring_lines(
     m: &ModelInputs,
     d: &CostDefaults,
     building_value: f64,
+    kiinteistovero: f64,
 ) -> Vec<RecurringLine> {
     let g = m.general_inflation;
     let e = m.energy_inflation;
-
-    let kiinteistovero = p
-        .kiinteistovero_eur_yr
-        .unwrap_or_else(|| d.estimated_kiinteistovero(building_value));
 
     let mut lines = vec![
         RecurringLine { name: "kiinteistovero", annual0: kiinteistovero, inflation: g },

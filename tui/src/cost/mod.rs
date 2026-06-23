@@ -55,9 +55,14 @@ pub struct PurchaseInputs {
 pub struct PropertyInputs {
     pub heating: HeatingType,
     pub water: WaterSupply,
-    /// Building rebuild value, the base for the maintenance reserve and a proxy
-    /// for kiinteistövero. Defaults to 0.7 × price when not set.
+    /// Building rebuild value, the base for the maintenance reserve. Defaults to
+    /// 0.7 × price when not set.
     pub building_value_eur: Option<f64>,
+    /// Taxable land value for kiinteistövero. Defaults to 0.2 × price when not set.
+    pub land_value_eur: Option<f64>,
+    /// Leisure/holiday property (mökki / intended_use loma): taxed on the higher
+    /// general building band rather than the permanent-residence band.
+    pub is_leisure: bool,
     pub fireplace: bool,
     pub private_road: bool,
     /// Annual ground rent for a leased plot (vuokratontti), 0 for owned plots.
@@ -159,7 +164,7 @@ fn rate_path(p: &PurchaseInputs) -> Vec<f64> {
 
 /// Compute the itemized one-time costs at t=0.
 pub fn one_time_costs(p: &PurchaseInputs, d: &CostDefaults) -> OneTimeCosts {
-    let loan = p.debt_free_price_eur * p.ltv;
+    let loan = p.price_eur * p.ltv;
     let down_payment = (p.price_eur - loan).max(0.0);
     let transfer_rate = match p.holding_form {
         HoldingForm::Kiinteisto => d.transfer_tax_kiinteisto,
@@ -194,7 +199,7 @@ pub fn project(
     defaults: &CostDefaults,
 ) -> Projection {
     let one_time = one_time_costs(purchase, defaults);
-    let loan = purchase.debt_free_price_eur * purchase.ltv;
+    let loan = purchase.price_eur * purchase.ltv;
 
     let path = rate_path(purchase);
     let schedule = amortization_schedule(loan, &path, purchase.term_years, purchase.repayment);
@@ -204,7 +209,15 @@ pub fn project(
     let building_value = property
         .building_value_eur
         .unwrap_or(0.7 * purchase.price_eur);
-    let lines = recurring::recurring_lines(property, model, defaults, building_value);
+    let building_taxable = 0.5 * building_value;
+    let land_taxable = property
+        .land_value_eur
+        .unwrap_or(0.2 * purchase.price_eur);
+    let kiinteistovero = property.kiinteistovero_eur_yr.unwrap_or_else(|| {
+        defaults.estimated_kiinteistovero(building_taxable, land_taxable, property.is_leisure)
+    });
+    let lines =
+        recurring::recurring_lines(property, model, defaults, building_value, kiinteistovero);
     let nd = model.nominal_discount();
 
     let mut years = Vec::with_capacity(model.horizon_years as usize);
@@ -220,7 +233,7 @@ pub fn project(
             .capex
             .iter()
             .filter(|(yr, _)| *yr == t)
-            .map(|(_, amt)| amt * (1.0 + model.general_inflation).powi(t as i32))
+            .map(|(_, amt)| amt * (1.0 + model.general_inflation).powi((t - 1) as i32))
             .sum();
         let total_nominal = interest + recurring + capex;
         let discounted = total_nominal / (1.0 + nd).powi(t as i32);

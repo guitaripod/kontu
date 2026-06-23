@@ -203,8 +203,8 @@ export function normalizeHeatingType(raw: unknown): string | null {
   if (/kaukolampo/.test(s)) return "kaukolampo";
   if (/maalampo/.test(s)) return "maalampo";
   if (/oljy/.test(s)) return "oljy";
-  if (/(ilmavesilampopumppu|ivlp)/.test(s)) return "ilmalampopumppu";
-  if (/(ilmalampopumppu|ilma-vesi)/.test(s)) return "ilmalampopumppu";
+  if (/(ilmavesilampopumppu|ivlp|ilma-?vesi)/.test(s)) return "ivlp";
+  if (/(ilmalampopumppu|ilma-?ilma)/.test(s)) return "sahko";
   if (/puu|takka|halko|klapi/.test(s)) return "puu";
   if (/sahko/.test(s)) return "sahko";
   return s;

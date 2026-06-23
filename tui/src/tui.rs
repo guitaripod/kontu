@@ -19,7 +19,7 @@ pub enum Event {
     Tick,
     Render,
     Key(KeyEvent),
-    Resize(u16, u16),
+    Resize,
 }
 
 pub struct Tui {
@@ -66,8 +66,8 @@ async fn event_loop(tx: mpsc::UnboundedSender<Event>) {
                     Some(Ok(CtEvent::Key(key))) if key.kind == KeyEventKind::Press => {
                         if tx.send(Event::Key(key)).is_err() { break; }
                     }
-                    Some(Ok(CtEvent::Resize(w, h))) => {
-                        if tx.send(Event::Resize(w, h)).is_err() { break; }
+                    Some(Ok(CtEvent::Resize(..))) => {
+                        if tx.send(Event::Resize).is_err() { break; }
                     }
                     Some(Ok(_)) => {}
                     Some(Err(_)) | None => break,

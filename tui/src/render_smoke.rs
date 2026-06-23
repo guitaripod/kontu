@@ -9,7 +9,7 @@ use crate::action::Screen;
 use crate::api::KontuClient;
 use crate::app::App;
 use crate::config::Config;
-use crate::models::{Listing, ListingDetail, ListingEvent, Photo};
+use crate::models::{Listing, ListingDetail, ListingEvent, ListingScore, Photo};
 
 fn sample_listing(id: i64, price: i64, year: i32) -> Listing {
     Listing {
@@ -74,6 +74,13 @@ fn sample_app() -> App {
         }],
         dossier: Some(serde_json::json!({ "distance_to_water_m": 80.0 })),
         cost_inputs: None,
+        note: Some("Lakeside, but old plinth — get a kuntotutkimus.".into()),
+        score: Some(ListingScore {
+            score: Some(80),
+            rank: None,
+            deal_breaker: Some(false),
+        }),
+        tags: vec!["lakeside".into(), "follow-up".into()],
     };
     app.detail = Some(detail);
     app

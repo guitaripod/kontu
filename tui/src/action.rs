@@ -30,8 +30,6 @@ impl Screen {
 #[derive(Debug)]
 pub enum Action {
     Quit,
-    Render,
-    Tick,
     Refresh,
     Sync,
     Navigate(Screen),

@@ -34,6 +34,7 @@ pub struct CostState {
     pub heating: HeatingType,
     pub water: WaterSupply,
     pub building_value: Option<f64>,
+    pub is_leisure: bool,
     pub fireplace: bool,
     pub private_road: bool,
     pub ground_rent: f64,
@@ -63,6 +64,7 @@ impl CostState {
             heating: HeatingType::Kaukolampo,
             water: WaterSupply::Municipal,
             building_value: None,
+            is_leisure: false,
             fireplace: false,
             private_road: false,
             ground_rent: 0.0,
@@ -98,6 +100,7 @@ impl CostState {
             .as_deref()
             .map(|r| r.contains("yksityis"))
             .unwrap_or(false);
+        self.is_leisure = is_leisure_listing(l);
         self.capex = risk.capex_events();
         let _ = d;
     }
@@ -122,6 +125,8 @@ impl CostState {
             heating: self.heating,
             water: self.water,
             building_value_eur: self.building_value,
+            land_value_eur: None,
+            is_leisure: self.is_leisure,
             fireplace: self.fireplace,
             private_road: self.private_road,
             ground_rent_eur_yr: self.ground_rent,
@@ -173,7 +178,7 @@ impl CostState {
             HeatingType::Oljy => "öljy",
             HeatingType::Sahko => "sähkö",
             HeatingType::Puu => "puu",
-            HeatingType::IlmaLampopumppu => "ilmalämpöpumppu",
+            HeatingType::Ivlp => "ilmavesilämpöpumppu",
         }
     }
 
@@ -194,6 +199,21 @@ impl CostState {
     }
 }
 
+/// A mökki / loma property is taxed on the general (leisure) kiinteistövero band.
+fn is_leisure_listing(l: &Listing) -> bool {
+    let leisure_type = l
+        .property_type
+        .as_deref()
+        .map(|t| t.contains("mökki") || t.contains("mokki") || t.contains("loma"))
+        .unwrap_or(false);
+    let leisure_use = l
+        .intended_use
+        .as_deref()
+        .map(|u| u.contains("loma"))
+        .unwrap_or(false);
+    leisure_type || leisure_use
+}
+
 fn cycle_repayment(r: RepaymentType, fwd: bool) -> RepaymentType {
     let order = [
         RepaymentType::Annuiteetti,
@@ -207,7 +227,7 @@ fn cycle_heating(h: HeatingType, fwd: bool) -> HeatingType {
     let order = [
         HeatingType::Kaukolampo,
         HeatingType::Maalampo,
-        HeatingType::IlmaLampopumppu,
+        HeatingType::Ivlp,
         HeatingType::Puu,
         HeatingType::Oljy,
         HeatingType::Sahko,
@@ -244,6 +264,8 @@ pub struct App {
 
     pub detail: Option<ListingDetail>,
     pub detail_scroll: u16,
+    pub note_editing: bool,
+    pub note_buffer: String,
 
     pub compare: Vec<i64>,
     pub cost: CostState,
@@ -281,6 +303,8 @@ impl App {
             sort_desc: false,
             detail: None,
             detail_scroll: 0,
+            note_editing: false,
+            note_buffer: String::new(),
             compare: Vec::new(),
             toast: None,
             toast_ticks: 0,
@@ -295,7 +319,7 @@ impl App {
         while !self.should_quit {
             let Some(event) = tui.next().await else { break };
             match event {
-                Event::Render | Event::Resize(_, _) => self.draw(tui)?,
+                Event::Render | Event::Resize => self.draw(tui)?,
                 Event::Tick => self.tick(),
                 Event::Key(key) => {
                     if let Some(action) = self.on_key(key) {
@@ -339,7 +363,6 @@ impl App {
     fn update(&mut self, action: Action) {
         match action {
             Action::Quit => self.should_quit = true,
-            Action::Render | Action::Tick => {}
             Action::Refresh => {
                 self.loading = true;
                 self.spawn_listings();
@@ -566,6 +589,18 @@ impl App {
     }
 
     fn on_key_detail(&mut self, key: KeyEvent) -> Option<Action> {
+        if self.note_editing {
+            match key.code {
+                KeyCode::Esc => self.note_editing = false,
+                KeyCode::Enter => self.commit_note(),
+                KeyCode::Backspace => {
+                    self.note_buffer.pop();
+                }
+                KeyCode::Char(c) => self.note_buffer.push(c),
+                _ => {}
+            }
+            return None;
+        }
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('h') | KeyCode::Backspace => {
                 Some(Action::Navigate(Screen::List))
@@ -585,8 +620,112 @@ impl App {
                 }
                 None
             }
+            KeyCode::Char(c @ '1'..='5') => {
+                self.apply_score((c as i32 - '0' as i32) * 20);
+                None
+            }
+            KeyCode::Char('d') => {
+                self.toggle_deal_breaker();
+                None
+            }
+            KeyCode::Char('n') => {
+                self.start_note_edit();
+                None
+            }
             _ => None,
         }
+    }
+
+    fn start_note_edit(&mut self) {
+        if self.detail.is_none() {
+            return;
+        }
+        self.note_buffer = self
+            .detail
+            .as_ref()
+            .and_then(|d| d.note.clone())
+            .unwrap_or_default();
+        self.note_editing = true;
+    }
+
+    fn apply_score(&mut self, score: i32) {
+        let id;
+        let deal_breaker;
+        {
+            let Some(detail) = self.detail.as_mut() else {
+                return;
+            };
+            id = detail.listing.id;
+            let mut s = detail.score.take().unwrap_or_default();
+            s.score = Some(score as i64);
+            deal_breaker = s.deal_breaker.unwrap_or(false);
+            detail.score = Some(s);
+        }
+        self.spawn_set_score(id, score, deal_breaker);
+        self.toast(format!("Personal score {score}"), false);
+    }
+
+    fn toggle_deal_breaker(&mut self) {
+        let id;
+        let score;
+        let deal_breaker;
+        {
+            let Some(detail) = self.detail.as_mut() else {
+                return;
+            };
+            id = detail.listing.id;
+            let mut s = detail.score.take().unwrap_or_default();
+            deal_breaker = !s.deal_breaker.unwrap_or(false);
+            s.deal_breaker = Some(deal_breaker);
+            score = s.score.unwrap_or(0) as i32;
+            detail.score = Some(s);
+        }
+        self.spawn_set_score(id, score, deal_breaker);
+        self.toast(
+            if deal_breaker {
+                "Marked deal-breaker"
+            } else {
+                "Cleared deal-breaker"
+            },
+            false,
+        );
+    }
+
+    fn commit_note(&mut self) {
+        let note = self.note_buffer.clone();
+        let id = match self.detail.as_mut() {
+            Some(detail) => {
+                detail.note = Some(note.clone());
+                detail.listing.id
+            }
+            None => {
+                self.note_editing = false;
+                return;
+            }
+        };
+        self.note_editing = false;
+        self.spawn_set_note(id, note);
+        self.toast("Note saved", false);
+    }
+
+    fn spawn_set_score(&self, id: i64, score: i32, deal_breaker: bool) {
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = client.set_score(id, score, deal_breaker).await {
+                let _ = tx.send(Action::Error(format!("save score: {e}")));
+            }
+        });
+    }
+
+    fn spawn_set_note(&self, id: i64, note: String) {
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = client.set_note(id, &note).await {
+                let _ = tx.send(Action::Error(format!("save note: {e}")));
+            }
+        });
     }
 
     fn on_key_filter(&mut self, key: KeyEvent) -> Option<Action> {

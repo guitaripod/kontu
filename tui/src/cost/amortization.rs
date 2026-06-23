@@ -30,6 +30,13 @@ fn annuity_payment(p: f64, r: f64, n: usize) -> f64 {
     p * r / (1.0 - (1.0 + r).powi(-(n as i32)))
 }
 
+/// kiinteä tasaerä keeps the instalment fixed and lets the term flex when a
+/// rising rate leaves a balloon; the schedule may extend to the ~40-year
+/// statutory maximum so the extended-term interest is accrued, not dropped.
+fn kiintea_tasaera_max_months() -> usize {
+    40 * 12
+}
+
 /// All-in annual rate for a given loan-year; the last entry repeats past the slice.
 fn annual_rate_for(rates: &[f64], year: usize) -> f64 {
     if rates.is_empty() {
@@ -52,21 +59,29 @@ pub fn amortization_schedule(
     term_years: u32,
     repayment: RepaymentType,
 ) -> Vec<MonthRow> {
-    let n_months = (term_years * 12) as usize;
-    if n_months == 0 || principal <= 0.0 {
+    let nominal_months = (term_years * 12) as usize;
+    if nominal_months == 0 || principal <= 0.0 {
         return Vec::new();
     }
-    let mut rows = Vec::with_capacity(n_months);
+    let max_months = match repayment {
+        RepaymentType::KiinteaTasaera => kiintea_tasaera_max_months(),
+        _ => nominal_months,
+    };
+    let mut rows = Vec::with_capacity(nominal_months);
     let mut balance = principal;
-    let const_principal = principal / n_months as f64;
-    let fixed_payment = annuity_payment(principal, annual_rate_for(annual_rates, 0) / 12.0, n_months);
+    let const_principal = principal / nominal_months as f64;
+    let fixed_payment =
+        annuity_payment(principal, annual_rate_for(annual_rates, 0) / 12.0, nominal_months);
     let mut annuity = 0.0;
 
-    for m in 0..n_months {
+    for m in 0..max_months {
+        if balance <= 1e-6 {
+            break;
+        }
         let year = m / 12;
         let r = annual_rate_for(annual_rates, year) / 12.0;
         if matches!(repayment, RepaymentType::Annuiteetti) && m % 12 == 0 {
-            annuity = annuity_payment(balance, r, n_months - m);
+            annuity = annuity_payment(balance, r, nominal_months.saturating_sub(m).max(1));
         }
         let interest = balance * r;
         let mut principal_paid = match repayment {

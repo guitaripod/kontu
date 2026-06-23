@@ -105,6 +105,22 @@ pub fn draw(app: &mut App, frame: &mut Frame, area: Rect) {
         lines.push(Line::from(Span::styled("   no notable risk flags", t.dimmed())));
     }
 
+    head(&mut lines, t, "Personal  (1–5 score · d deal-breaker · n note)");
+    let score_str = detail
+        .score
+        .as_ref()
+        .and_then(|s| s.score)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "—".into());
+    kv(&mut lines, t, "Your score", score_str);
+    if detail.score.as_ref().and_then(|s| s.deal_breaker).unwrap_or(false) {
+        lines.push(Line::from(Span::styled("  ✗ deal-breaker", Style::default().fg(t.bad))));
+    }
+    if !detail.tags.is_empty() {
+        kv(&mut lines, t, "Tags", detail.tags.join(", "));
+    }
+    kv(&mut lines, t, "Note", detail.note.clone().unwrap_or_else(|| "—".into()));
+
     if !detail.events.is_empty() {
         head(&mut lines, t, "History");
         for e in &detail.events {
@@ -142,12 +158,28 @@ pub fn draw(app: &mut App, frame: &mut Frame, area: Rect) {
     } else {
         area
     };
+
+    let body_area = if app.note_editing {
+        let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(text_area);
+        let editor = Block::default()
+            .title(" Note — Enter saves · Esc cancels ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(t.accent_style());
+        frame.render_widget(
+            Paragraph::new(format!("{}▏", app.note_buffer)).block(editor),
+            rows[1],
+        );
+        rows[0]
+    } else {
+        text_area
+    };
     frame.render_widget(
         Paragraph::new(lines)
             .block(block)
             .wrap(Wrap { trim: false })
             .scroll((app.detail_scroll, 0)),
-        text_area,
+        body_area,
     );
 }
 

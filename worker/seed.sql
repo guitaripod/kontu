@@ -21,13 +21,15 @@ INSERT OR REPLACE INTO cost_defaults (key, num_value, text_value, unit, note, up
 
   ('kvero_building_permanent_min',     0.0041,  NULL, 'fraction', 'kiinteistovero permanent residence building band', unixepoch()),
   ('kvero_building_permanent_max',     0.0100,  NULL, 'fraction', NULL, unixepoch()),
+  ('kvero_building_general_min',       0.0093,  NULL, 'fraction', 'general building incl. leisure band', unixepoch()),
+  ('kvero_building_general_max',       0.0200,  NULL, 'fraction', NULL, unixepoch()),
   ('kvero_land_min',                   0.0130,  NULL, 'fraction', 'general land band', unixepoch()),
   ('kvero_land_max',                   0.0200,  NULL, 'fraction', NULL, unixepoch()),
 
   ('insurance_eur_yr',                 450,     NULL, 'eur/yr',   'kotivakuutus (range 240-650)', unixepoch()),
   ('heating_maalampo_eur_yr',          900,     NULL, 'eur/yr',   NULL, unixepoch()),
   ('heating_kaukolampo_eur_yr',        2200,    NULL, 'eur/yr',   NULL, unixepoch()),
-  ('heating_ilmalampopumppu_eur_yr',   1400,    NULL, 'eur/yr',   'ilmavesilampopumppu', unixepoch()),
+  ('heating_ivlp_eur_yr',              1400,    NULL, 'eur/yr',   'ilmavesilampopumppu (air-to-water)', unixepoch()),
   ('heating_oljy_eur_yr',              3100,    NULL, 'eur/yr',   NULL, unixepoch()),
   ('heating_sahko_eur_yr',             4000,    NULL, 'eur/yr',   'suora sahkolammitys', unixepoch()),
   ('heating_puu_eur_yr',               1200,    NULL, 'eur/yr',   NULL, unixepoch()),

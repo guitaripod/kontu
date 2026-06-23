@@ -134,10 +134,6 @@ pub struct Listing {
 
     #[serde(default)]
     pub days_on_market: Option<i64>,
-    #[serde(default)]
-    pub personal_score: Option<i32>,
-    #[serde(default)]
-    pub risk_score: Option<u32>,
 }
 
 fn default_status() -> String {
@@ -170,9 +166,16 @@ impl Listing {
         match self.heating_type.as_deref().map(str::to_lowercase) {
             Some(h) if h.contains("maalämpö") || h.contains("maalampo") => HeatingType::Maalampo,
             Some(h) if h.contains("öljy") || h.contains("oljy") => HeatingType::Oljy,
-            Some(h) if h.contains("ilma") => HeatingType::IlmaLampopumppu,
+            Some(h) if h.contains("ilmavesi") || h.contains("ivlp") => HeatingType::Ivlp,
             Some(h) if h.contains("puu") || h.contains("pelletti") => HeatingType::Puu,
-            Some(h) if h.contains("sähkö") || h.contains("sahko") => HeatingType::Sahko,
+            Some(h)
+                if h.contains("sähkö")
+                    || h.contains("sahko")
+                    || h.contains("ilmalämpö")
+                    || h.contains("ilmalampo") =>
+            {
+                HeatingType::Sahko
+            }
             _ => HeatingType::Kaukolampo,
         }
     }
@@ -334,6 +337,17 @@ pub struct Photo {
     pub position: i64,
 }
 
+/// Personal weighted score for a listing (from the `listing_scores` table).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListingScore {
+    #[serde(default)]
+    pub score: Option<i64>,
+    #[serde(default)]
+    pub rank: Option<i64>,
+    #[serde(default, deserialize_with = "de_opt_bool")]
+    pub deal_breaker: Option<bool>,
+}
+
 /// Full detail for one listing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListingDetail {
@@ -346,6 +360,12 @@ pub struct ListingDetail {
     pub dossier: Option<serde_json::Value>,
     #[serde(default)]
     pub cost_inputs: Option<serde_json::Value>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub score: Option<ListingScore>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[cfg(test)]

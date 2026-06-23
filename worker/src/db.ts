@@ -155,7 +155,7 @@ const SORTABLE: Record<string, string> = {
   ppm2: "COALESCE(l.price_per_m2, CASE WHEN l.living_area_m2 > 0 THEN CAST(l.price_eur AS REAL)/l.living_area_m2 END)",
   size: "l.living_area_m2",
   year: "l.year_built",
-  dom: "l.first_seen",
+  dom: "(-l.first_seen)",
   risk: "json_array_length(COALESCE(l.risk_structures,'[]'))",
   score: "sc.score",
 };
