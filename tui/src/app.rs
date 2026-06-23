@@ -374,19 +374,17 @@ impl App {
             }
             Action::DetailLoaded(detail) => {
                 self.cost_from_detail(&detail);
-                if self.picker.is_some() {
-                    if let Some(first) = detail.photos.first() {
+                if self.picker.is_some()
+                    && let Some(first) = detail.photos.first() {
                         self.spawn_photo(first.r2_key.clone());
                     }
-                }
                 self.detail = Some(*detail);
             }
             Action::PhotoLoaded(bytes) => {
-                if let Some(picker) = &self.picker {
-                    if let Ok(img) = image::load_from_memory(&bytes) {
+                if let Some(picker) = &self.picker
+                    && let Ok(img) = image::load_from_memory(&bytes) {
                         self.image = Some(picker.new_resize_protocol(img));
                     }
-                }
             }
             Action::CostDefaultsLoaded(d) => {
                 self.defaults = *d;

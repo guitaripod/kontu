@@ -55,16 +55,14 @@ impl Config {
     }
 
     fn apply_env_overrides(&mut self) {
-        if let Ok(v) = std::env::var("KONTU_SERVER_URL") {
-            if !v.is_empty() {
+        if let Ok(v) = std::env::var("KONTU_SERVER_URL")
+            && !v.is_empty() {
                 self.server_url = v;
             }
-        }
-        if let Ok(v) = std::env::var("KONTU_API_TOKEN") {
-            if !v.is_empty() {
+        if let Ok(v) = std::env::var("KONTU_API_TOKEN")
+            && !v.is_empty() {
                 self.api_token = v;
             }
-        }
     }
 
     pub fn save(&self) -> Result<()> {

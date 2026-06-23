@@ -258,11 +258,10 @@ impl FilterState {
     pub fn to_query_pairs(&self) -> Vec<(String, String)> {
         let mut q: Vec<(String, String)> = Vec::new();
         let mut s = |k: &str, v: &Option<String>| {
-            if let Some(v) = v {
-                if !v.is_empty() {
+            if let Some(v) = v
+                && !v.is_empty() {
                     q.push((k.to_string(), v.clone()));
                 }
-            }
         };
         s("municipality", &self.municipality);
         s("property_type", &self.property_type);
