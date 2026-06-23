@@ -59,7 +59,7 @@ cd ../tui
 KONTU_SERVER_URL=http://localhost:8788 KONTU_API_TOKEN=devtoken cargo run
 
 # Headless end-to-end check (no TTY needed):
-KONTU_SERVER_URL=http://localhost:8788 KONTU_API_TOKEN=devtoken cargo run -- --probe
+KONTU_SERVER_URL=http://localhost:8788 KONTU_API_TOKEN=devtoken cargo run -- doctor
 ```
 
 Or use the helper: `./scripts/dev.sh` starts the worker (seeded) and launches the TUI.
@@ -82,6 +82,30 @@ Logs are written to `~/.local/state/kontu/kontu.log` (a TUI can't use stdout).
 `↑↓/jk` move · `Enter` detail · `c` cost model · `/` filter · `s` sort · `space`
 mark · `v` compare · `o` open in browser · `r` refresh · `y` sync · `?` help · `q` quit.
 In the cost model: `↑↓` pick an input, `←→` adjust it.
+In the detail screen: `1`–`5` set a personal score, `d` deal-breaker, `n` edit a note.
+
+## CLI (agent-native)
+
+With **no subcommand** `kontu` opens the TUI. With a subcommand it's a scriptable
+CLI — every command takes `--json` for machine-readable output, and `--help`
+(plus `kontu <cmd> --help`) fully documents the surface, so an LLM can discover and
+drive it from natural language. Self-describe with `kontu --help`.
+
+```sh
+kontu list --municipality Outokumpu --price-max 120000 --shore oma_ranta --json
+kontu show 8002 --json                       # params + risk + cost + history + notes
+kontu cost 8002 --ltv 0.7 --euribor 0.03 --horizon 25 --schedule --json
+kontu risk 8002 --json                       # 0–100 score + deferred-capex flags
+kontu compare 8002 8007 8010 --json          # price / €m² / modelled NPV / risk
+kontu score 8002 80 --deal-breaker           # personal weighted score
+kontu note 8002 "Lakeside; book a kuntotutkimus."
+kontu defaults | market Outokumpu | sync | doctor
+```
+
+Commands: `list · show · cost · risk · compare · score · note · sync · defaults ·
+market · open · doctor`. Listings/history/photos come from the Worker; the cost and
+risk models run locally in Rust. Connection comes from `~/.config/kontu/config.toml`
+(or `--server`/`--token`, or `KONTU_SERVER_URL`/`KONTU_API_TOKEN`).
 
 ## Deploy (requires your Cloudflare account)
 

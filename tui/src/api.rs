@@ -85,6 +85,10 @@ impl KontuClient {
         self.get_json("/api/cost-defaults", &[]).await
     }
 
+    pub async fn market(&self, municipality: &str) -> Result<serde_json::Value> {
+        self.get_json(&format!("/api/market/{municipality}"), &[]).await
+    }
+
     /// Fetch raw photo bytes from the Worker's R2-backed photo route.
     pub async fn photo_bytes(&self, key: &str) -> Result<Vec<u8>> {
         let resp = self
