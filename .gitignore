@@ -1,0 +1,19 @@
+# Rust
+/target
+**/target
+Cargo.lock.bak
+
+# Node / Wrangler
+node_modules/
+.wrangler/
+dist/
+*.log
+
+# Secrets / local
+.dev.vars
+.env
+*.local
+worker/.dev.vars
+
+# OS
+.DS_Store
