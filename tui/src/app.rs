@@ -16,6 +16,8 @@ use crate::risk::{self, RiskAssessment};
 use crate::theme::Theme;
 use crate::tui::{Event, Tui};
 use crate::{cost, ui};
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
 
 /// Interactive cost-of-ownership model state (adjustable on the Cost screen).
 #[derive(Debug, Clone)]
@@ -224,6 +226,8 @@ pub struct App {
     pub client: KontuClient,
     pub defaults: CostDefaults,
     pub theme: Theme,
+    pub picker: Option<Picker>,
+    pub image: Option<StatefulProtocol>,
     pub screen: Screen,
     pub help_visible: bool,
     pub should_quit: bool,
@@ -252,7 +256,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(client: KontuClient, _config: &Config) -> Self {
+    pub fn new(client: KontuClient, _config: &Config, picker: Option<Picker>) -> Self {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         let defaults = CostDefaults::default();
         let mut table = TableState::default();
@@ -262,6 +266,8 @@ impl App {
             cost: CostState::from_defaults(&defaults),
             defaults,
             theme: Theme::default(),
+            picker,
+            image: None,
             screen: Screen::List,
             help_visible: false,
             should_quit: false,
@@ -342,11 +348,17 @@ impl App {
                 self.toast("Triggering sync…", false);
                 self.spawn_sync();
             }
-            Action::Navigate(screen) => self.screen = screen,
+            Action::Navigate(screen) => {
+                if screen != Screen::Detail {
+                    self.image = None;
+                }
+                self.screen = screen;
+            }
             Action::OpenDetail(id) => {
                 self.screen = Screen::Detail;
                 self.detail = None;
                 self.detail_scroll = 0;
+                self.image = None;
                 self.spawn_detail(id);
             }
             Action::ListingsLoaded(listings) => {
@@ -362,7 +374,19 @@ impl App {
             }
             Action::DetailLoaded(detail) => {
                 self.cost_from_detail(&detail);
+                if self.picker.is_some() {
+                    if let Some(first) = detail.photos.first() {
+                        self.spawn_photo(first.r2_key.clone());
+                    }
+                }
                 self.detail = Some(*detail);
+            }
+            Action::PhotoLoaded(bytes) => {
+                if let Some(picker) = &self.picker {
+                    if let Ok(img) = image::load_from_memory(&bytes) {
+                        self.image = Some(picker.new_resize_protocol(img));
+                    }
+                }
             }
             Action::CostDefaultsLoaded(d) => {
                 self.defaults = *d;
@@ -421,6 +445,16 @@ impl App {
                 Err(e) => {
                     let _ = tx.send(Action::Error(format!("detail: {e}")));
                 }
+            }
+        });
+    }
+
+    fn spawn_photo(&self, key: String) {
+        let client = self.client.clone();
+        let tx = self.action_tx.clone();
+        tokio::spawn(async move {
+            if let Ok(bytes) = client.photo_bytes(&key).await {
+                let _ = tx.send(Action::PhotoLoaded(bytes));
             }
         });
     }

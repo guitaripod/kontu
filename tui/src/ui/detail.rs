@@ -17,7 +17,8 @@ pub fn draw(app: &mut App, frame: &mut Frame, area: Rect) {
         }
     };
     let l = &detail.listing;
-    let t = &app.theme;
+    let theme = app.theme.clone();
+    let t = &theme;
 
     let near_water = detail
         .dossier
@@ -131,12 +132,22 @@ pub fn draw(app: &mut App, frame: &mut Frame, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(t.border_style());
+
+    let text_area = if app.image.is_some() {
+        let rows = Layout::vertical([Constraint::Length(16), Constraint::Min(0)]).split(area);
+        if let Some(protocol) = app.image.as_mut() {
+            frame.render_stateful_widget(ratatui_image::StatefulImage::new(), rows[0], protocol);
+        }
+        rows[1]
+    } else {
+        area
+    };
     frame.render_widget(
         Paragraph::new(lines)
             .block(block)
             .wrap(Wrap { trim: false })
             .scroll((app.detail_scroll, 0)),
-        area,
+        text_area,
     );
 }
 

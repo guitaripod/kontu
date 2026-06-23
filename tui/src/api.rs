@@ -85,6 +85,21 @@ impl KontuClient {
         self.get_json("/api/cost-defaults", &[]).await
     }
 
+    /// Fetch raw photo bytes from the Worker's R2-backed photo route.
+    pub async fn photo_bytes(&self, key: &str) -> Result<Vec<u8>> {
+        let resp = self
+            .http
+            .get(self.url(&format!("/api/photos/{key}")))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .with_context(|| format!("GET photo {key}"))?;
+        if !resp.status().is_success() {
+            bail!("photo {key} -> HTTP {}", resp.status());
+        }
+        Ok(resp.bytes().await?.to_vec())
+    }
+
     pub async fn trigger_sync(&self) -> Result<serde_json::Value> {
         let resp = self
             .http

@@ -48,7 +48,7 @@ fn sample_listing(id: i64, price: i64, year: i32) -> Listing {
 
 fn sample_app() -> App {
     let client = KontuClient::new("http://localhost:8787", "t").unwrap();
-    let mut app = App::new(client, &Config::default());
+    let mut app = App::new(client, &Config::default(), None);
     app.listings = vec![
         sample_listing(1, 55_000, 1975),
         sample_listing(2, 142_000, 2004),
@@ -113,6 +113,15 @@ fn renders_overlays_and_empty_state() {
     app.listings.clear();
     app.loading = false;
     render(&mut app, Screen::List);
+}
+
+#[test]
+fn renders_detail_with_an_image() {
+    let mut app = sample_app();
+    let picker = ratatui_image::picker::Picker::halfblocks();
+    let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 8, image::Rgb([90, 150, 210])));
+    app.image = Some(picker.new_resize_protocol(img));
+    render(&mut app, Screen::Detail);
 }
 
 #[test]

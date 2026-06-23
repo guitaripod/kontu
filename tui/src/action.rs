@@ -38,6 +38,7 @@ pub enum Action {
     OpenDetail(i64),
     ListingsLoaded(Vec<Listing>),
     DetailLoaded(Box<ListingDetail>),
+    PhotoLoaded(Vec<u8>),
     CostDefaultsLoaded(Box<CostDefaults>),
     Toast(String),
     Error(String),

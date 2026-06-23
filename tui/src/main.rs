@@ -29,7 +29,8 @@ async fn main() -> Result<()> {
     }
 
     tracing::info!(server = %config.server_url, "kontu starting");
-    let mut app = app::App::new(client, &config);
+    let picker = ratatui_image::picker::Picker::from_query_stdio().ok();
+    let mut app = app::App::new(client, &config, picker);
 
     let mut tui = tui::Tui::new()?;
     let result = app.run(&mut tui).await;
