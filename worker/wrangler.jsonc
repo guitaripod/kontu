@@ -9,7 +9,7 @@
     {
       "binding": "DB",
       "database_name": "kontu",
-      "database_id": "REPLACE_AFTER_CREATE",
+      "database_id": "9a75b994-8a6c-43f1-86a6-ddf6cd04cda6",
       "migrations_dir": "migrations"
     }
   ],
