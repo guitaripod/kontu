@@ -287,6 +287,55 @@ impl FilterState {
     }
 }
 
+/// A page of listings from `/api/listings`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListingsPage {
+    #[serde(default)]
+    pub listings: Vec<Listing>,
+    #[serde(default)]
+    pub total: i64,
+}
+
+/// A price/status change event from the listing history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListingEvent {
+    pub kind: String,
+    #[serde(default)]
+    pub old_price_eur: Option<i64>,
+    #[serde(default)]
+    pub new_price_eur: Option<i64>,
+    #[serde(default)]
+    pub old_value: Option<String>,
+    #[serde(default)]
+    pub new_value: Option<String>,
+    pub observed_at: i64,
+}
+
+/// A cached listing photo (served from R2 via the Worker).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Photo {
+    pub r2_key: String,
+    #[serde(default)]
+    pub content_type: Option<String>,
+    pub source_url: String,
+    #[serde(default)]
+    pub position: i64,
+}
+
+/// Full detail for one listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListingDetail {
+    pub listing: Listing,
+    #[serde(default)]
+    pub events: Vec<ListingEvent>,
+    #[serde(default)]
+    pub photos: Vec<Photo>,
+    #[serde(default)]
+    pub dossier: Option<serde_json::Value>,
+    #[serde(default)]
+    pub cost_inputs: Option<serde_json::Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
