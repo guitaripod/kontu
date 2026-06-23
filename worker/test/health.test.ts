@@ -1,7 +1,28 @@
 import { describe, it, expect } from "vitest";
 import { app } from "../src/index";
 
-const env = { API_TOKEN: "secret" } as unknown as import("../src/index").Env;
+const emptyStatement = {
+  bind() {
+    return emptyStatement;
+  },
+  async first() {
+    return { n: 0 };
+  },
+  async all() {
+    return { results: [] };
+  },
+  async run() {
+    return { meta: {} };
+  },
+};
+
+const stubDb = {
+  prepare() {
+    return emptyStatement;
+  },
+};
+
+const env = { API_TOKEN: "secret", DB: stubDb } as unknown as import("../src/index").Env;
 
 describe("worker routes", () => {
   it("health returns ok", async () => {
