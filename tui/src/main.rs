@@ -1,4 +1,7 @@
+#![allow(dead_code)]
+
 mod config;
+mod cost;
 mod logging;
 
 fn main() -> anyhow::Result<()> {
