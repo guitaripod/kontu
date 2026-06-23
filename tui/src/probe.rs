@@ -38,13 +38,17 @@ pub async fn run(client: &KontuClient) -> Result<()> {
         );
     }
 
-    let mut outk = FilterState::default();
-    outk.municipality = Some("Outokumpu".into());
+    let outk = FilterState {
+        municipality: Some("Outokumpu".into()),
+        ..Default::default()
+    };
     let filtered = client.list_listings(&outk, SortColumn::Price, false, 100, 0).await?;
     println!("filter Outokumpu : {} listings", filtered.listings.len());
 
-    let mut shore = FilterState::default();
-    shore.shore = Some("oma_ranta".into());
+    let shore = FilterState {
+        shore: Some("oma_ranta".into()),
+        ..Default::default()
+    };
     let shoref = client.list_listings(&shore, SortColumn::PricePerM2, true, 100, 0).await?;
     println!("filter oma_ranta : {} listings", shoref.listings.len());
 

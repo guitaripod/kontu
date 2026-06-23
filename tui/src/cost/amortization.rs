@@ -44,8 +44,8 @@ fn annual_rate_for(rates: &[f64], year: usize) -> f64 {
 /// Build a month-by-month amortization schedule.
 ///
 /// `annual_rates` is the all-in nominal annual rate per loan-year (12-mo Euribor
-/// + margin); held constant within each 12-month block (the 12-mo Euribor reset
-/// cadence) and the last entry repeats if the slice is shorter than the term.
+/// plus margin); held constant within each 12-month block (the 12-mo Euribor
+/// reset cadence) and the last entry repeats if the slice is shorter than the term.
 pub fn amortization_schedule(
     principal: f64,
     annual_rates: &[f64],

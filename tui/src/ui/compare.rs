@@ -7,6 +7,8 @@ use crate::models::Listing;
 
 const MAX_COLS: usize = 4;
 
+type Getter = Box<dyn Fn(usize, &Listing) -> String>;
+
 pub fn draw(app: &mut App, frame: &mut Frame, area: Rect) {
     let t = &app.theme;
     let listings = app.compared_listings();
@@ -32,7 +34,7 @@ pub fn draw(app: &mut App, frame: &mut Frame, area: Rect) {
         })
         .collect();
 
-    let attrs: Vec<(&str, Box<dyn Fn(usize, &Listing) -> String>)> = vec![
+    let attrs: Vec<(&str, Getter)> = vec![
         ("Place", Box::new(|_, l: &Listing| l.title())),
         ("Type", Box::new(|_, l: &Listing| str_opt(&l.property_type))),
         ("Price", Box::new(|_, l: &Listing| money_opt(l.price_eur))),

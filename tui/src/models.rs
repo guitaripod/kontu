@@ -366,13 +366,16 @@ mod tests {
 
     #[test]
     fn heating_enum_maps_finnish_strings() {
-        let mut l = Listing::default();
-        l.heating_type = Some("Maalämpö".into());
-        assert_eq!(l.heating_enum(), HeatingType::Maalampo);
-        l.heating_type = Some("Öljylämmitys".into());
-        assert_eq!(l.heating_enum(), HeatingType::Oljy);
-        l.heating_type = None;
-        assert_eq!(l.heating_enum(), HeatingType::Kaukolampo);
+        let heating = |s: Option<&str>| {
+            Listing {
+                heating_type: s.map(str::to_string),
+                ..Default::default()
+            }
+            .heating_enum()
+        };
+        assert_eq!(heating(Some("Maalämpö")), HeatingType::Maalampo);
+        assert_eq!(heating(Some("Öljylämmitys")), HeatingType::Oljy);
+        assert_eq!(heating(None), HeatingType::Kaukolampo);
     }
 
     #[test]
