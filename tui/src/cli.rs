@@ -12,6 +12,7 @@ use crate::cost::{HeatingType, Projection, RepaymentType};
 use crate::format::{area_opt, int_opt, money, money_opt, num_opt, ppm2_opt, str_opt};
 use crate::models::{FilterState, Listing, ListingDetail, SortColumn};
 use crate::risk::{self, RiskAssessment};
+use crate::spec::{Pref, Spec};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -98,6 +99,141 @@ pub enum Command {
     Guide,
     /// Pull real Oikotie listings for a municipality (fetched from YOUR IP) into the Worker
     Pull(PullArgs),
+    /// Show or edit your saved house-hunting spec (the criteria `match` ranks against)
+    Spec {
+        #[command(subcommand)]
+        action: Option<SpecAction>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SpecAction {
+    /// Update spec fields (only the flags you pass change)
+    Set(SpecSetArgs),
+    /// Reset the spec to empty
+    Clear,
+}
+
+#[derive(Args, Debug)]
+pub struct SpecSetArgs {
+    #[arg(long)]
+    price_max: Option<i64>,
+    #[arg(long)]
+    price_min: Option<i64>,
+    /// Municipality to search (repeatable); none = anywhere in Finland
+    #[arg(long = "area")]
+    area: Vec<String>,
+    /// Search anywhere in Finland (clears saved areas)
+    #[arg(long)]
+    anywhere: bool,
+    /// Property type (repeatable), e.g. omakotitalo, mökki
+    #[arg(long = "type")]
+    property_type: Vec<String>,
+    /// Lakehouse: any|plus|required|avoid
+    #[arg(long)]
+    shore: Option<String>,
+    #[arg(long)]
+    min_plot_m2: Option<f64>,
+    #[arg(long)]
+    min_m2: Option<f64>,
+    #[arg(long)]
+    min_rooms: Option<f64>,
+    #[arg(long)]
+    year_min: Option<i32>,
+    /// Prefer an owned plot (avoid vuokratontti)
+    #[arg(long)]
+    owned_plot: bool,
+    /// Require working everyday infrastructure (water/sewer/electricity/road)
+    #[arg(long)]
+    require_infra: bool,
+    /// EV charging: any|plus|required|avoid
+    #[arg(long)]
+    ev: Option<String>,
+    /// Fibre internet: any|plus|required|avoid
+    #[arg(long)]
+    fiber: Option<String>,
+    /// Not direct neighbours: any|plus|required|avoid
+    #[arg(long)]
+    privacy: Option<String>,
+    /// Rank toward the lowest total cost of ownership
+    #[arg(long)]
+    minimize_tco: bool,
+    #[arg(long = "max-dom")]
+    max_dom: Option<i64>,
+    /// Cost-model horizon in years
+    #[arg(long)]
+    horizon: Option<u32>,
+    /// Exclude listings matching this keyword (repeatable)
+    #[arg(long = "exclude")]
+    exclude: Vec<String>,
+    /// Free-text note capturing intent the fields can't
+    #[arg(long)]
+    note: Option<String>,
+}
+
+impl SpecSetArgs {
+    fn apply(&self, s: &mut Spec) {
+        if let Some(v) = self.price_max {
+            s.price_max = Some(v);
+        }
+        if let Some(v) = self.price_min {
+            s.price_min = Some(v);
+        }
+        if self.anywhere {
+            s.municipalities.clear();
+        }
+        if !self.area.is_empty() {
+            s.municipalities = self.area.clone();
+        }
+        if !self.property_type.is_empty() {
+            s.property_types = self.property_type.clone();
+        }
+        if let Some(p) = &self.shore {
+            s.shore = Pref::parse(p);
+        }
+        if self.min_plot_m2.is_some() {
+            s.min_plot_m2 = self.min_plot_m2;
+        }
+        if self.min_m2.is_some() {
+            s.min_m2 = self.min_m2;
+        }
+        if self.min_rooms.is_some() {
+            s.min_rooms = self.min_rooms;
+        }
+        if self.year_min.is_some() {
+            s.year_min = self.year_min;
+        }
+        if self.owned_plot {
+            s.owned_plot = true;
+        }
+        if self.require_infra {
+            s.require_infra = true;
+        }
+        if let Some(p) = &self.ev {
+            s.ev_charging = Pref::parse(p);
+        }
+        if let Some(p) = &self.fiber {
+            s.fiber = Pref::parse(p);
+        }
+        if let Some(p) = &self.privacy {
+            s.privacy = Pref::parse(p);
+        }
+        if self.minimize_tco {
+            s.minimize_tco = true;
+        }
+        if self.max_dom.is_some() {
+            s.max_dom = self.max_dom;
+        }
+        if let Some(v) = self.horizon {
+            s.horizon_years = v;
+        }
+        if !self.exclude.is_empty() {
+            s.exclude = self.exclude.clone();
+        }
+        if let Some(n) = &self.note {
+            s.notes = n.clone();
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -404,8 +540,85 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
                 );
             }
         }
+        Command::Spec { action } => match action {
+            None => {
+                let s = Spec::load()?;
+                if json {
+                    emit(&s)?;
+                } else {
+                    print_spec(&s);
+                }
+            }
+            Some(SpecAction::Clear) => {
+                Spec::default().save()?;
+                ok(json, "spec cleared".into());
+            }
+            Some(SpecAction::Set(a)) => {
+                let mut s = Spec::load()?;
+                a.apply(&mut s);
+                s.save()?;
+                if json {
+                    emit(&s)?;
+                } else {
+                    print_spec(&s);
+                }
+            }
+        },
     }
     Ok(())
+}
+
+fn opt_i<T: ToString>(v: Option<T>) -> String {
+    v.map(|x| x.to_string()).unwrap_or_else(|| "—".into())
+}
+
+fn print_spec(s: &Spec) {
+    let areas = if s.municipalities.is_empty() {
+        "anywhere in Finland".to_string()
+    } else {
+        s.municipalities.join(", ")
+    };
+    let types = if s.property_types.is_empty() {
+        "any".to_string()
+    } else {
+        s.property_types.join(", ")
+    };
+    println!("areas      {areas}");
+    println!("price      {} – {}", money_opt(s.price_min), money_opt(s.price_max));
+    println!("type       {types}");
+    println!("shore      {:?}", s.shore);
+    println!("privacy    {:?}   ev {:?}   fiber {:?}", s.privacy, s.ev_charging, s.fiber);
+    let mut flags = Vec::new();
+    if s.owned_plot {
+        flags.push("owned-plot");
+    }
+    if s.require_infra {
+        flags.push("infra-required");
+    }
+    if s.minimize_tco {
+        flags.push("minimize-TCO");
+    }
+    if !flags.is_empty() {
+        println!("flags      {}", flags.join(", "));
+    }
+    println!(
+        "minimums   plot {} m² · area {} m² · year {} · rooms {} · dom ≤ {}",
+        opt_i(s.min_plot_m2.map(|v| v as i64)),
+        opt_i(s.min_m2.map(|v| v as i64)),
+        opt_i(s.year_min),
+        opt_i(s.min_rooms),
+        opt_i(s.max_dom),
+    );
+    println!("horizon    {} yr", s.horizon_years);
+    if !s.exclude.is_empty() {
+        println!("exclude    {}", s.exclude.join(", "));
+    }
+    if !s.notes.is_empty() {
+        println!("notes      {}", s.notes);
+    }
+    if s.is_empty() {
+        println!("(empty — set it with `kontu spec set ...`)");
+    }
 }
 
 fn assess(detail: &ListingDetail) -> RiskAssessment {

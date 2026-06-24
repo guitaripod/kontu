@@ -11,6 +11,7 @@ mod models;
 #[cfg(test)]
 mod render_smoke;
 mod risk;
+mod spec;
 mod theme;
 mod tui;
 mod ui;
