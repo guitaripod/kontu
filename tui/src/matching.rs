@@ -160,8 +160,17 @@ fn is_buildable_plot(l: &Listing, desc: &str) -> bool {
     if has(desc, &["purettav", "purkukunt"]) {
         return true;
     }
+    // Sold AS a build site — a permit/right to build a new cabin — even when a
+    // spurious "Asuinpinta-ala" suggests a dwelling (only a shed exists). Distinct
+    // from "rakennusoikeutta jäljellä" = spare building rights on an existing home.
+    if has(desc, &["poikkeamislupa", "rakennuspaik", "rakentamiselle", "rakentaa vapaa", "rakentaa loma", "rakennettavaksi"])
+        || (has(desc, &["rakennusoikeus"]) && has(desc, &["loma-asun", "lomaasun", "vapaa-ajan asun"]))
+    {
+        return true;
+    }
+    // Weaker "build here" hints only count when there's no real dwelling.
     let no_dwelling = l.living_area_m2.map(|a| a < 20.0).unwrap_or(true);
-    no_dwelling && has(desc, &["rakennuspaik", "mahdollisuus rakentaa", "rakentaa ympärivuoti"])
+    no_dwelling && has(desc, &["mahdollisuus rakentaa", "rakentaa ympärivuoti", "rakennusmahdollisuu"])
 }
 
 fn winter_signal(l: &Listing, desc: &str) -> f64 {
@@ -591,6 +600,13 @@ mod tests {
         let desc = "rakennuspaikka järven rannalla, mahdollisuus rakentaa ympärivuotiseen";
         assert!(winter_signal(&plot, desc) < 0.3, "a bare buildable plot must not read year-round");
         assert!(condition_signal(&plot, desc) <= 0.3, "a buildable plot is not good condition");
+        // A build permit must be caught even when a spurious Asuinpinta-ala is set.
+        let permit = Listing {
+            living_area_m2: Some(63.0),
+            description: Some("Metsäkiinteistö jossa poikkeamislupa vapaa-ajan asunnon rakentamiselle.".into()),
+            ..Default::default()
+        };
+        assert!(is_buildable_plot(&permit, "poikkeamislupa vapaa-ajan asunnon rakentamiselle"));
     }
 
     #[test]
