@@ -462,12 +462,23 @@ function leadingInt(v: unknown): number | null {
   return m ? Number(m[0]) : null;
 }
 
-/** Last whitespace-separated token of an Etuovi `addressLine2` (the municipality). */
+/**
+ * Last whitespace-separated token of an Etuovi `addressLine2` (the municipality),
+ * treating known multi-word kunta suffixes ("X kunta", "Koski Tl") as one name.
+ */
 function lastToken(v: unknown): string | null {
   const s = typeof v === "string" ? v.trim() : "";
   if (s === "") return null;
   const parts = s.split(/\s+/);
-  return parts[parts.length - 1] ?? null;
+  const last = parts[parts.length - 1];
+  if (last === undefined) return null;
+  if (parts.length >= 2) {
+    const lastLower = last.toLowerCase();
+    if (lastLower === "kunta" || lastLower === "tl") {
+      return `${parts[parts.length - 2]} ${last}`;
+    }
+  }
+  return last;
 }
 
 /** `addressLine2` minus its last token (the district), or null if nothing remains. */
@@ -510,10 +521,10 @@ export function normalizeEtuoviAnnouncement(announcement: unknown): NormalizedLi
     district: withoutLastToken(addressLine2),
     lat: toNumber(firstString(a["latitude"], get(a, "coordinates.latitude"))),
     lon: toNumber(firstString(a["longitude"], get(a, "coordinates.longitude"))),
-    price_eur: toInt(firstString(a["searchPrice"], a["price"], a["sellingPrice"])),
+    price_eur: positiveOrNull(toInt(firstString(a["searchPrice"], a["price"], a["sellingPrice"]))),
     debt_free_price_eur: toInt(firstString(a["debtFreePrice"], a["unencumberedSalesPrice"])),
     debt_share_eur: toInt(firstString(a["debtShare"], a["shareOfLiabilities"])),
-    price_per_m2: toNumber(firstString(a["pricePerSquareMeter"], a["pricePerM2"])),
+    price_per_m2: positiveOrNull(toNumber(firstString(a["pricePerSquareMeter"], a["pricePerM2"]))),
     maintenance_charge_eur: toInt(firstString(a["maintenanceCharge"], a["careCharge"])),
     financing_charge_eur: toInt(a["financingCharge"]),
     ground_rent_eur_yr: toInt(a["groundRent"]),

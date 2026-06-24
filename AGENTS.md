@@ -53,7 +53,8 @@ then run the workflow. If a spec was agreed earlier, reuse it instead of re-aski
   Read with `spec --json`. Flags: `--anywhere | --area <m>` (repeat), `--type <t>` (repeat),
   `--price-max N --price-min N --min-plot-m2 N --min-m2 N --min-rooms N --year-min N`,
   `--shore|--ev|--fiber|--privacy any|plus|required|avoid`, `--owned-plot --require-infra
-  --minimize-tco --max-dom N --horizon N --exclude <kw> --note "…"`.
+  --minimize-tco --max-dom N --horizon N --exclude <kw> --note "…"`. The three bool flags
+  each have a `--no-…` form (`--no-owned-plot` etc.) to clear them without `spec clear`.
 - `match [--pull] [--limit N] [--scan N]` — rank listings by fit to the spec, best first
   (`score` 0–100; TCO-dominant + shore/privacy/ev/fiber/infra signals + risk; `reasons[]`
   explains each). `--pull` refreshes listings for the spec from your IP first.

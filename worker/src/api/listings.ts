@@ -125,7 +125,8 @@ api.post("/import", async (c) => {
     .json<{ source?: string; cards?: unknown[]; announcements?: unknown[] }>()
     .catch(() => ({}));
   const isEtuovi =
-    body.source === "etuovi" || (!Array.isArray(body.cards) && Array.isArray(body.announcements));
+    body.source === "etuovi" ||
+    (body.source !== "oikotie" && !Array.isArray(body.cards) && Array.isArray(body.announcements));
   const items = isEtuovi
     ? Array.isArray(body.announcements)
       ? body.announcements

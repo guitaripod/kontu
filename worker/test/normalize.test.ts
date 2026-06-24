@@ -240,6 +240,22 @@ describe("normalizeEtuoviAnnouncement", () => {
     expect(single.district).toBeNull();
   });
 
+  it("keeps multi-word kunta suffixes together for municipality", () => {
+    expect(
+      normalizeEtuoviAnnouncement({ friendlyId: "z", addressLine2: "Sandbacka Pedersören kunta" })
+        .municipality,
+    ).toBe("Pedersören kunta");
+    expect(normalizeEtuoviAnnouncement({ friendlyId: "z", addressLine2: "Koski Tl" }).municipality).toBe(
+      "Koski Tl",
+    );
+  });
+
+  it("maps a price-on-request (searchPrice 0) to null, not 0", () => {
+    const n = normalizeEtuoviAnnouncement({ friendlyId: "z", searchPrice: 0, pricePerSquareMeter: 0 });
+    expect(n.price_eur).toBeNull();
+    expect(n.price_per_m2).toBeNull();
+  });
+
   it("never throws on empty/garbage input", () => {
     expect(() => normalizeEtuoviAnnouncement(null)).not.toThrow();
     expect(() => normalizeEtuoviAnnouncement({})).not.toThrow();

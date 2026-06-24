@@ -122,6 +122,7 @@ pub struct MatchArgs {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum SpecAction {
     /// Update spec fields (only the flags you pass change)
     Set(SpecSetArgs),
@@ -156,11 +157,17 @@ pub struct SpecSetArgs {
     #[arg(long)]
     year_min: Option<i32>,
     /// Prefer an owned plot (avoid vuokratontti)
-    #[arg(long)]
+    #[arg(long = "owned-plot", overrides_with = "no_owned_plot")]
     owned_plot: bool,
+    /// Stop preferring an owned plot
+    #[arg(long = "no-owned-plot")]
+    no_owned_plot: bool,
     /// Require working everyday infrastructure (water/sewer/electricity/road)
-    #[arg(long)]
+    #[arg(long = "require-infra", overrides_with = "no_require_infra")]
     require_infra: bool,
+    /// Drop the infrastructure requirement
+    #[arg(long = "no-require-infra")]
+    no_require_infra: bool,
     /// EV charging: any|plus|required|avoid
     #[arg(long)]
     ev: Option<String>,
@@ -171,8 +178,11 @@ pub struct SpecSetArgs {
     #[arg(long)]
     privacy: Option<String>,
     /// Rank toward the lowest total cost of ownership
-    #[arg(long)]
+    #[arg(long = "minimize-tco", overrides_with = "no_minimize_tco")]
     minimize_tco: bool,
+    /// Stop ranking toward lowest TCO
+    #[arg(long = "no-minimize-tco")]
+    no_minimize_tco: bool,
     #[arg(long = "max-dom")]
     max_dom: Option<i64>,
     /// Cost-model horizon in years
@@ -220,9 +230,13 @@ impl SpecSetArgs {
         }
         if self.owned_plot {
             s.owned_plot = true;
+        } else if self.no_owned_plot {
+            s.owned_plot = false;
         }
         if self.require_infra {
             s.require_infra = true;
+        } else if self.no_require_infra {
+            s.require_infra = false;
         }
         if let Some(p) = &self.ev {
             s.ev_charging = Pref::parse(p);
@@ -235,6 +249,8 @@ impl SpecSetArgs {
         }
         if self.minimize_tco {
             s.minimize_tco = true;
+        } else if self.no_minimize_tco {
+            s.minimize_tco = false;
         }
         if self.max_dom.is_some() {
             s.max_dom = self.max_dom;
@@ -595,25 +611,41 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
             let spec = Spec::load()?;
             if a.pull {
                 let shore = matches!(spec.shore, Pref::Required | Pref::Plus);
-                let muni = (spec.municipalities.len() == 1).then(|| spec.municipalities[0].as_str());
-                let _ = pull_portals(
-                    client,
-                    "both",
-                    muni,
-                    &spec.property_types,
-                    shore,
-                    spec.price_max,
-                    a.scan,
-                    "your spec",
-                )
-                .await;
+                if spec.municipalities.is_empty() {
+                    let _ = pull_portals(
+                        client, "both", None, &spec.property_types, shore, spec.price_max, a.scan,
+                        "your spec",
+                    )
+                    .await;
+                } else {
+                    for m in &spec.municipalities {
+                        let _ = pull_portals(
+                            client, "both", Some(m.as_str()), &spec.property_types, shore,
+                            spec.price_max, a.scan, m,
+                        )
+                        .await;
+                    }
+                }
             }
             let defaults = client.cost_defaults().await.unwrap_or_default();
-            let filter = spec_to_filter(&spec);
-            let page = client
-                .list_listings(&filter, SortColumn::Price, false, a.scan as u32, 0)
-                .await?;
-            let ranked = crate::matching::rank(&spec, page.listings, &defaults);
+            let mut filter = spec_to_filter(&spec);
+            let listings = if spec.municipalities.len() >= 2 {
+                let mut all = Vec::new();
+                for m in &spec.municipalities {
+                    filter.municipality = Some(m.clone());
+                    let page = client
+                        .list_listings(&filter, SortColumn::Price, false, a.scan as u32, 0)
+                        .await?;
+                    all.extend(page.listings);
+                }
+                all
+            } else {
+                client
+                    .list_listings(&filter, SortColumn::Price, false, a.scan as u32, 0)
+                    .await?
+                    .listings
+            };
+            let ranked = crate::matching::rank(&spec, listings, &defaults);
             let top: Vec<_> = ranked.into_iter().take(a.limit).collect();
             if json {
                 emit(&top)?;
@@ -646,8 +678,8 @@ fn print_matches(top: &[crate::matching::Scored]) {
         return;
     }
     println!(
-        "{:>6} {:>4} {:<22} {:<13} {:>9} {:>4} {:>8}  {}",
-        "ID", "FIT", "PLACE", "WHERE", "PRICE", "RSK", "€/MO", "WHY"
+        "{:>6} {:>4} {:<22} {:<13} {:>9} {:>4} {:>8}  WHY",
+        "ID", "FIT", "PLACE", "WHERE", "PRICE", "RSK", "€/MO"
     );
     for m in top {
         println!(

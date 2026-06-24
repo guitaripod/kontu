@@ -21,14 +21,18 @@ struct Session {
     loaded: String,
 }
 
-/// Extract a `<meta name="NAME" content="VALUE">` value from the page.
+/// Extract a `<meta name="NAME" content="VALUE">` value, scoped to the single
+/// meta tag that carries `name="NAME"` (any attribute order). Returns `None`
+/// rather than leaking a neighbouring tag's content when that tag has none.
 fn meta(html: &str, name: &str) -> Option<String> {
     let anchor = format!("name=\"{name}\"");
-    let start = html.find(&anchor)? + anchor.len();
-    let rest = &html[start..];
-    let cidx = rest.find("content=\"")? + "content=\"".len();
-    let end = rest[cidx..].find('"')?;
-    Some(rest[cidx..cidx + end].to_string())
+    let pos = html.find(&anchor)?;
+    let tag_start = html[..pos].rfind('<')?;
+    let rel_end = html[tag_start..].find('>')?;
+    let tag = &html[tag_start..tag_start + rel_end];
+    let cidx = tag.find("content=\"")? + "content=\"".len();
+    let end = tag[cidx..].find('"')?;
+    Some(tag[cidx..cidx + end].to_string())
 }
 
 /// Oikotie buildingType[] bitmask codes (1=kerrostalo, 2=rivitalo, 4=omakotitalo
@@ -261,12 +265,11 @@ async fn resolve_etuovi_location(http: &Client, name: &str) -> Result<Value> {
                 .unwrap_or(false)
         })
         .or_else(|| arr.first());
-    if let Some(p) = pick {
-        if let Some(code) = p.get("code").and_then(Value::as_str) {
+    if let Some(p) = pick
+        && let Some(code) = p.get("code").and_then(Value::as_str) {
             let typ = p.get("type").and_then(Value::as_str).unwrap_or("CITY");
             return Ok(json!([{ "code": code, "type": typ }]));
         }
-    }
     Ok(json!([]))
 }
 
@@ -312,7 +315,13 @@ async fn fetch_etuovi(
             .json()
             .await
             .context("decoding etuovi response")?;
-        let total = resp.get("countOfAllResults").and_then(Value::as_i64).unwrap_or(0);
+        let total = resp
+            .get("countOfAllResults")
+            .or_else(|| resp.get("totalCount"))
+            .or_else(|| resp.get("total"))
+            .or_else(|| resp.get("totalResults"))
+            .or_else(|| resp.get("count"))
+            .and_then(Value::as_i64);
         let batch = resp
             .get("announcements")
             .and_then(Value::as_array)
@@ -321,7 +330,7 @@ async fn fetch_etuovi(
         let got = batch.len();
         out.extend(batch);
         page += 1;
-        if got < 50 || out.len() as i64 >= total || out.len() >= limit {
+        if got < 50 || total.is_some_and(|t| out.len() as i64 >= t) || out.len() >= limit {
             break;
         }
         tokio::time::sleep(Duration::from_millis(800)).await;

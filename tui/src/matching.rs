@@ -158,17 +158,26 @@ fn pref_weight(pref: Pref, base: f64) -> f64 {
     }
 }
 
+/// For an avoided trait, reward its ABSENCE (penalize presence); otherwise score
+/// presence. Keeps each term in [0,1] so the additive `/ total_w` normalization
+/// stays valid (an avoided trait that is present lowers the score, never inflates it).
+fn pref_signal(pref: Pref, signal: f64) -> f64 {
+    if matches!(pref, Pref::Avoid) {
+        1.0 - signal
+    } else {
+        signal
+    }
+}
+
 fn passes_hard(spec: &Spec, l: &Listing, s: &Signals) -> bool {
-    if let Some(max) = spec.price_max {
-        if l.price_eur.map(|p| p > max).unwrap_or(true) {
+    if let Some(max) = spec.price_max
+        && l.price_eur.map(|p| p > max).unwrap_or(true) {
             return false;
         }
-    }
-    if let Some(min) = spec.price_min {
-        if l.price_eur.map(|p| p < min).unwrap_or(false) {
+    if let Some(min) = spec.price_min
+        && l.price_eur.map(|p| p < min).unwrap_or(false) {
             return false;
         }
-    }
     if !spec.property_types.is_empty() {
         let t = l.property_type.as_deref().unwrap_or("").to_lowercase();
         if !spec.property_types.iter().any(|want| t.contains(&want.to_lowercase())) {
@@ -181,31 +190,26 @@ fn passes_hard(spec: &Spec, l: &Listing, s: &Signals) -> bool {
             return false;
         }
     }
-    if let Some(y) = spec.year_min {
-        if l.year_built.map(|b| b < y).unwrap_or(false) {
+    if let Some(y) = spec.year_min
+        && l.year_built.map(|b| b < y).unwrap_or(false) {
             return false;
         }
-    }
-    if let Some(m) = spec.min_m2 {
-        if l.living_area_m2.map(|a| a < m).unwrap_or(false) {
+    if let Some(m) = spec.min_m2
+        && l.living_area_m2.map(|a| a < m).unwrap_or(false) {
             return false;
         }
-    }
-    if let Some(r) = spec.min_rooms {
-        if l.room_count.map(|c| c < r).unwrap_or(false) {
+    if let Some(r) = spec.min_rooms
+        && l.room_count.map(|c| c < r).unwrap_or(false) {
             return false;
         }
-    }
-    if let Some(p) = spec.min_plot_m2 {
-        if l.plot_area_m2.map(|a| a < p).unwrap_or(false) {
+    if let Some(p) = spec.min_plot_m2
+        && l.plot_area_m2.map(|a| a < p).unwrap_or(false) {
             return false;
         }
-    }
-    if let Some(d) = spec.max_dom {
-        if l.days_on_market.map(|x| x > d).unwrap_or(false) {
+    if let Some(d) = spec.max_dom
+        && l.days_on_market.map(|x| x > d).unwrap_or(false) {
             return false;
         }
-    }
     if !spec.exclude.is_empty() {
         let hay = format!(
             "{} {} {}",
@@ -274,12 +278,13 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
     });
 
     let w = &spec.weights;
+    let wtco = if spec.minimize_tco { w.tco * 2.0 } else { w.tco };
     let ws = pref_weight(spec.shore, w.shore);
     let wp = pref_weight(spec.privacy, w.privacy);
     let we = pref_weight(spec.ev_charging, w.ev);
     let wf = pref_weight(spec.fiber, w.fiber);
     let wi = if spec.require_infra { w.infra * 1.5 } else { w.infra };
-    let total_w = (w.tco + ws + wp + we + wf + wi + w.risk).max(1e-9);
+    let total_w = (wtco + ws + wp + we + wf + wi + w.risk).max(1e-9);
 
     let mut scored: Vec<Scored> = candidates
         .into_iter()
@@ -290,11 +295,11 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
                 1.0 - (c.npv - min_npv) / (max_npv - min_npv)
             };
             let risk_score = 1.0 - (c.risk as f64 / 100.0);
-            let score = (w.tco * tco
-                + ws * c.signals.shore
-                + wp * c.signals.privacy
-                + we * c.signals.ev
-                + wf * c.signals.fiber
+            let score = (wtco * tco
+                + ws * pref_signal(spec.shore, c.signals.shore)
+                + wp * pref_signal(spec.privacy, c.signals.privacy)
+                + we * pref_signal(spec.ev_charging, c.signals.ev)
+                + wf * pref_signal(spec.fiber, c.signals.fiber)
                 + wi * c.signals.infra
                 + w.risk * risk_score)
                 / total_w
@@ -345,10 +350,9 @@ fn reasons(c: &Candidate, tco: f64) -> Vec<String> {
     if c.risk < 25 {
         r.push("low risk".into());
     }
-    if let Some(f) = &c.listing.fairness {
-        if matches!(f.band.as_str(), "underpriced" | "below_market") {
+    if let Some(f) = &c.listing.fairness
+        && matches!(f.band.as_str(), "underpriced" | "below_market") {
             r.push("below-market price".into());
         }
-    }
     r
 }

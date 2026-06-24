@@ -4,7 +4,7 @@
  * crawler, enrichment and API compose.
  */
 import type { NormalizedListing } from "./normalize";
-import { contentHash, fingerprintFor } from "./normalize";
+import { asciiFold, contentHash, fingerprintFor } from "./normalize";
 
 export interface ListingRow {
   id: number;
@@ -865,9 +865,9 @@ export async function getListingsForProperty(db: D1Database, propertyId: number)
 export async function getMarketStats(db: D1Database, municipality: string): Promise<unknown[]> {
   const { results } = await db
     .prepare(
-      "SELECT * FROM market_stats WHERE area_kind = 'municipality' AND area_code = ? COLLATE NOCASE ORDER BY fetched_at DESC",
+      "SELECT * FROM market_stats WHERE area_kind = 'municipality' AND area_code = ? ORDER BY fetched_at DESC",
     )
-    .bind(municipality)
+    .bind(asciiFold(municipality))
     .all();
   return results;
 }

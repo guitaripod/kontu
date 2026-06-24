@@ -165,14 +165,16 @@ mod tests {
 
     #[test]
     fn round_trips_through_toml() {
-        let mut s = Spec::default();
-        s.price_max = Some(100_000);
-        s.municipalities = vec!["Outokumpu".into()];
-        s.property_types = vec!["omakotitalo".into(), "mökki".into()];
-        s.shore = Pref::Required;
-        s.ev_charging = Pref::Plus;
-        s.fiber = Pref::Plus;
-        s.minimize_tco = true;
+        let s = Spec {
+            price_max: Some(100_000),
+            municipalities: vec!["Outokumpu".into()],
+            property_types: vec!["omakotitalo".into(), "mökki".into()],
+            shore: Pref::Required,
+            ev_charging: Pref::Plus,
+            fiber: Pref::Plus,
+            minimize_tco: true,
+            ..Default::default()
+        };
         let text = toml::to_string_pretty(&s).unwrap();
         let parsed: Spec = toml::from_str(&text).unwrap();
         assert_eq!(s, parsed);

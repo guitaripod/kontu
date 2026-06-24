@@ -127,7 +127,10 @@ export function fairnessBand(ratio: number | null): string {
 export async function loadMedians(db: D1Database): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   const { results } = await db
-    .prepare("SELECT area_code, value FROM market_stats WHERE metric = 'median_total_eur'")
+    .prepare(
+      "SELECT area_code, value FROM market_stats m WHERE metric = 'median_total_eur' " +
+        "AND period = (SELECT MAX(period) FROM market_stats WHERE metric = 'median_total_eur' AND area_code = m.area_code)",
+    )
     .all<{ area_code: string; value: number }>();
   for (const r of results) {
     if (r.value != null) out.set(r.area_code, r.value);
