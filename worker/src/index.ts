@@ -12,6 +12,17 @@ export interface Env {
 
 export const app = new Hono<{ Bindings: Env }>();
 
+app.get("/", (c) =>
+  c.html(
+    `<!doctype html><meta charset=utf8><title>kontu</title>
+<style>body{background:#16181d;color:#d8d8d8;font:15px/1.6 ui-monospace,monospace;max-width:42rem;margin:12vh auto;padding:0 1.5rem}a{color:#6cb6ff}code{color:#9ad8ff}</style>
+<h1>kontu</h1>
+<p>Private API backing the <em>kontu</em> Finnish house-hunting TUI &amp; CLI. Not a website.</p>
+<p>Listing/history/cost data lives behind a bearer token; the only public endpoint is
+<a href="/health"><code>/health</code></a>. Use the <code>kontu</code> CLI/TUI, not a browser.</p>`,
+  ),
+);
+
 app.get("/health", (c) =>
   c.json({ ok: true, service: "kontu", ts: new Date().toISOString() }),
 );
