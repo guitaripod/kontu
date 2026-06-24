@@ -361,6 +361,24 @@ describe("oikotie detail enrichment", () => {
       details: { "Keskimääräinen sähkönkulutus": "700 € / v" },
     });
     expect(yearly.electricity_eur_yr).toBe(700);
+    const dotThousands = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      details: { "Kiinteistövero": "1.234,56 € / v" },
+    });
+    expect(dotThousands.kiinteistovero_eur_yr).toBe(1235);
+  });
+
+  it("does not read kWh consumption or a bare number as a euro electricity cost", () => {
+    const kwh = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      details: { "Keskimääräinen sähkönkulutus": "18000 kWh / v" },
+    });
+    expect(kwh.electricity_eur_yr).toBeNull();
+    const bare = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      details: { "Keskimääräinen sähkönkulutus": "1500" },
+    });
+    expect(bare.electricity_eur_yr).toBeNull();
   });
 
   it("leaves fields untouched when no detail is present", () => {

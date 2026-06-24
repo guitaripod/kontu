@@ -71,6 +71,12 @@ pub async fn render_card(
     let defaults = client.cost_defaults().await.unwrap_or_default();
     let l = &detail.listing;
 
+    if l.price_eur.is_none() {
+        anyhow::bail!(
+            "listing {id} is price-on-request — no price to base an ownership card on"
+        );
+    }
+
     let near_water = l
         .shore
         .as_deref()
@@ -127,10 +133,27 @@ fn cap(s: &str) -> String {
     }
 }
 
+fn trunc(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>())
+}
+
 fn wrap_text(s: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in s.split_whitespace() {
+        if word.chars().count() > width {
+            if !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+            }
+            let chars: Vec<char> = word.chars().collect();
+            for chunk in chars.chunks(width) {
+                lines.push(chunk.iter().collect());
+            }
+            continue;
+        }
         if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
             lines.push(std::mem::take(&mut line));
         }
@@ -256,8 +279,8 @@ fn build_svg(
     let tag = t("luonnonrauha & oma ranta", "lakeside ownership").to_uppercase();
     s.push(format!(r##"<rect x="48" y="40" rx="6" width="{}" height="42" fill="{GOLD}"/>"##, 40 + (tag.chars().count() as i64) * 13));
     s.push(format!(r##"<text x="62" y="69" font-family="Liberation Sans" font-size="20" font-weight="bold" fill="#1c1c18" letter-spacing="1">{}</text>"##, esc(&tag)));
-    s.push(format!(r##"<text x="48" y="{}" font-family="Liberation Serif" font-size="62" font-weight="bold" fill="#fff">{}</text>"##, ph - 70, esc(&muni)));
-    s.push(format!(r##"<text x="50" y="{}" font-family="Liberation Sans" font-size="27" fill="#f2eede">{} · {}</text>"##, ph - 28, esc(&addr), esc(&shore_txt)));
+    s.push(format!(r##"<text x="48" y="{}" font-family="Liberation Serif" font-size="62" font-weight="bold" fill="#fff">{}</text>"##, ph - 70, esc(&trunc(&muni, 16))));
+    s.push(format!(r##"<text x="50" y="{}" font-family="Liberation Sans" font-size="27" fill="#f2eede">{} · {}</text>"##, ph - 28, esc(&trunc(&addr, 34)), esc(&shore_txt)));
     s.push(format!(r##"<text x="{}" y="{}" text-anchor="end" font-family="Liberation Serif" font-size="56" font-weight="bold" fill="#fff">{}</text>"##, w - 48, ph - 32, esc(&price)));
     s.push(format!(r##"<text x="{}" y="{}" text-anchor="end" font-family="Liberation Sans" font-size="20" font-weight="bold" fill="{GOLD}">{}</text>"##, w - 48, ph - 78, esc(&t("KÄTEISKAUPPA — EI ASUNTOLAINAA", "PAID IN FULL — NO MORTGAGE"))));
 
@@ -310,18 +333,20 @@ fn build_svg(
     ];
     y = grid(&mut s, y, &cells2, 2);
 
-    // value banner
+    // value banner — height follows the wrapped line count so text never clips
     y += 14;
-    s.push(format!(r##"<rect x="48" y="{y}" rx="12" width="{}" height="118" fill="{GREEN}"/>"##, w - 96));
-    s.push(format!(r##"<text x="74" y="{}" font-family="Liberation Sans" font-size="20" fill="{GOLD}" letter-spacing="1">{}</text>"##, y + 42, esc(&t("OMAISUUTTA, EI KULUA", "AN ASSET, NOT AN EXPENSE"))));
     let vline = t(
         &format!("Arvioitu arvo 20 vuoden kuluttua noin {} € — enemmän kuin maksettu {}. Raha ostaa pysyvää, arvonsa säilyttävää omaisuutta.", thousands(term), price),
         &format!("Modelled value in 20 years about {} € — above the {} paid. The money buys a lasting, appreciating asset.", thousands(term), price),
     );
-    for (i, ln) in wrap_text(&vline, 72).iter().enumerate() {
-        s.push(format!(r##"<text x="74" y="{}" font-family="Liberation Sans" font-size="23" fill="#f3efe2">{}</text>"##, y + 78 + i as i64 * 30, esc(ln)));
+    let vlines = wrap_text(&vline, 72);
+    let bh = (62 + vlines.len() as i64 * 32).max(118);
+    s.push(format!(r##"<rect x="48" y="{y}" rx="12" width="{}" height="{bh}" fill="{GREEN}"/>"##, w - 96));
+    s.push(format!(r##"<text x="74" y="{}" font-family="Liberation Sans" font-size="20" fill="{GOLD}" letter-spacing="1">{}</text>"##, y + 42, esc(&t("OMAISUUTTA, EI KULUA", "AN ASSET, NOT AN EXPENSE"))));
+    for (i, ln) in vlines.iter().enumerate() {
+        s.push(format!(r##"<text x="74" y="{}" font-family="Liberation Sans" font-size="23" fill="#f3efe2">{}</text>"##, y + 78 + i as i64 * 32, esc(ln)));
     }
-    y += 118 + 40;
+    y += bh + 40;
     s.push(format!(r##"<text x="48" y="{y}" font-family="Liberation Serif" font-size="23" font-style="italic" fill="{MUT}">{}</text>"##, esc(&t("Koottu kontulla — luvut virallisesta myynti-ilmoituksesta ja kustannusmalleista.", "Built with kontu — figures from the official listing & local cost models."))));
     s.push("</svg>".into());
     s.join("\n")
@@ -342,7 +367,7 @@ fn grid(s: &mut Vec<String>, y0: i64, cells: &[(String, String)], cols: i64) -> 
         let ry = y0 + row * (gh + 16);
         s.push(format!(r##"<rect x="{x}" y="{ry}" rx="10" width="{gw}" height="{gh}" fill="#fff" stroke="{LINE}"/>"##));
         s.push(format!(r##"<text x="{}" y="{}" font-family="Liberation Sans" font-size="19" fill="{MUT}" letter-spacing="0.5">{}</text>"##, x + 22, ry + 34, esc(&k.to_uppercase())));
-        s.push(format!(r##"<text x="{}" y="{}" font-family="Liberation Serif" font-size="26" font-weight="bold" fill="{GREEN2}">{}</text>"##, x + 22, ry + 72, esc(v)));
+        s.push(format!(r##"<text x="{}" y="{}" font-family="Liberation Serif" font-size="26" font-weight="bold" fill="{GREEN2}">{}</text>"##, x + 22, ry + 72, esc(&trunc(v, 27))));
     }
     let rows = (cells.len() as i64 + cols - 1) / cols;
     y0 + rows * (gh + 16)

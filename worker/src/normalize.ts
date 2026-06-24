@@ -238,6 +238,9 @@ export function normalizeHeatingType(raw: unknown): string | null {
   if (/oljy/.test(s)) return "oljy";
   if (/(ilmavesilampopumppu|ivlp|ilma-?vesi)/.test(s)) return "ivlp";
   if (/(ilmalampopumppu|ilma-?ilma)/.test(s)) return "sahko";
+  // Explicit electric heating system wins over a supplemental fireplace/stove
+  // ("Sähkölämmitys, Uuni- tai takkalämmitys" = electric primary + wood backup).
+  if (/sahkolammit|sahkolampo/.test(s)) return "sahko";
   if (/puu|takka|halko|klapi/.test(s)) return "puu";
   if (/sahko/.test(s)) return "sahko";
   return s;
@@ -501,18 +504,24 @@ export function normalizeWaterBody(raw: unknown): string | null {
   return null;
 }
 
-/** Euro amount from an Oikotie figure like "317,01 € / v" or "1 234 € / v". */
+/** Euro amount from an Oikotie figure like "317,01 € / v" or "1 234 € / v".
+ *  Uses toNumber so Finnish dot-thousands/comma-decimals ("1.234,56") parse right. */
 function euroAmount(raw: unknown): number | null {
   if (typeof raw !== "string") return null;
-  const m = raw.replace(/\s/g, "").replace(",", ".").match(/-?\d+(\.\d+)?/);
-  return m ? Math.round(Number(m[0])) : null;
+  const n = toNumber(raw);
+  return n == null ? null : Math.round(n);
 }
 
-/** A "X € / kk" or "X € / v" figure normalized to euros per YEAR. */
+/**
+ * A "X € / kk" or "X € / v" euro figure normalized to euros per YEAR. Requires an
+ * explicit euro token and rejects energy units — the source field
+ * "Keskimääräinen sähkönkulutus" is sometimes kWh, which must NOT be read as euros.
+ */
 function euroPerYear(raw: unknown): number | null {
+  if (typeof raw !== "string" || !/€|eur/i.test(raw) || /kwh|kw·h/i.test(raw)) return null;
   const eur = euroAmount(raw);
-  if (eur === null) return null;
-  return typeof raw === "string" && /\/\s*kk|kuukau/i.test(raw) ? eur * 12 : eur;
+  if (eur === null || eur <= 0) return null;
+  return /\/\s*kk|kuukau/i.test(raw) ? eur * 12 : eur;
 }
 
 /** First 4-digit year in a string (e.g. a renovation note "Kattoremontti 2023"). */

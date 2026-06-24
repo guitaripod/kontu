@@ -258,16 +258,34 @@ fn leisure_kiinteistovero_exceeds_permanent() {
 }
 
 #[test]
-fn actual_electricity_replaces_heating_estimate_no_double_count() {
+fn actual_electricity_replaces_heating_only_for_electric_heat() {
     let d = CostDefaults::default();
     let m = sample_model();
-    let mut p = sample_property();
-    p.electricity_eur_yr = Some(700.0);
-    let lines = recurring_lines(&p, &m, &d, 140_000.0, 900.0);
-    let heating = lines.iter().find(|l| l.name == "heating").map(|l| l.annual0).unwrap_or(-1.0);
-    let elec = lines.iter().find(|l| l.name == "electricity").map(|l| l.annual0);
-    assert_eq!(heating, 0.0, "actual energy figure replaces the heating estimate");
-    assert_eq!(elec, Some(700.0), "the actual electricity figure is used verbatim");
+    let heating_of = |p: &PropertyInputs| {
+        let lines = recurring_lines(p, &m, &d, 140_000.0, 900.0);
+        let h = lines.iter().find(|l| l.name == "heating").map(|l| l.annual0).unwrap_or(-1.0);
+        let e = lines.iter().find(|l| l.name == "electricity").map(|l| l.annual0);
+        (h, e)
+    };
+    // Electric heating: the actual electricity bill IS the heating, so zero it out.
+    let mut elec = sample_property();
+    elec.heating = HeatingType::Sahko;
+    elec.electricity_eur_yr = Some(700.0);
+    let (h, e) = heating_of(&elec);
+    assert_eq!(h, 0.0, "electric heating is inside the electricity bill");
+    assert_eq!(e, Some(700.0));
+    // District heating: billed separately, so keep the heating line AND add power.
+    let mut dh = sample_property();
+    dh.heating = HeatingType::Kaukolampo;
+    dh.electricity_eur_yr = Some(700.0);
+    let (h, e) = heating_of(&dh);
+    assert!(h > 0.0, "district heat is NOT in the electricity bill — keep it");
+    assert_eq!(e, Some(700.0), "electricity is added on top of district heat");
+    // A zero/garbage reading must fall back to the heating estimate.
+    let mut zero = sample_property();
+    zero.heating = HeatingType::Sahko;
+    zero.electricity_eur_yr = Some(0.0);
+    assert!(heating_of(&zero).0 > 0.0, "a 0 reading is not a real figure");
 }
 
 #[test]

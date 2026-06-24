@@ -87,11 +87,13 @@ pub fn recurring_lines(
         return lines;
     }
 
-    // When the listing's actual average-electricity figure is known, it IS the
-    // real total energy bill (electric heating is in it; wood is self-supplied),
-    // so it replaces the separate heating estimate rather than adding to it.
-    let actual_energy = p.electricity_eur_yr;
-    let heating0 = if actual_energy.is_some() { 0.0 } else { p.heating.annual_cost(d) };
+    // The listing's actual electricity spend only contains the HEATING cost when
+    // the house is electrically heated (Sahko); for district/oil/ground-source the
+    // heat is billed separately, so keep the modelled heating line and add the
+    // actual electricity on top rather than replacing it. Treat 0/garbage as absent.
+    let actual_energy = p.electricity_eur_yr.filter(|v| *v > 0.0);
+    let replaces_heating = actual_energy.is_some() && p.heating.electricity_included();
+    let heating0 = if replaces_heating { 0.0 } else { p.heating.annual_cost(d) };
     let mut lines = vec![
         RecurringLine { name: "kiinteistovero", annual0: kiinteistovero, inflation: g },
         RecurringLine { name: "insurance", annual0: p.insurance_eur_yr.unwrap_or(d.insurance_eur_yr), inflation: g },
