@@ -31,19 +31,35 @@ Offer sensible defaults and proceed if the user wants speed; otherwise confirm t
 then run the workflow. If a spec was agreed earlier, reuse it instead of re-asking.
 
 ## Workflow (natural language → commands)
-For "find a lakeside house in Outokumpu under 120k and tell me the 20-year cost":
-1. `kontu pull Outokumpu` — ingest/refresh real listings for the area.
-2. `kontu list --municipality Outokumpu --price-max 120000 --shore oma_ranta --sort price --json`
-3. For a candidate: `kontu show <id> --json` (everything), or focused:
-   `kontu cost <id> --horizon 20 --json`, `kontu risk <id> --json`.
-4. Shortlist: `kontu compare <id> <id> <id> --json`.
-5. Act: `kontu open <id>` (browser), `kontu score <id> 85 --deal-breaker`,
-   `kontu note <id> "..."`.
+
+### A) Open-ended "find me a house" → spec + match (preferred)
+1. Read the saved spec: `kontu spec --json`. If empty, or the request adds/changes
+   criteria, CLARIFY (above) then save it, e.g.:
+   `kontu spec set --anywhere --type omakotitalo --type mökki --price-max 100000 --shore required --privacy required --ev plus --fiber plus --owned-plot --minimize-tco --note "lakehouse, no direct neighbours, can charge a Tesla"`
+2. Get ranked matches: `kontu match --pull --json` (`--pull` fetches fresh listings for
+   the spec from THIS machine first; omit it to rank already-pulled data). Returns
+   listings best-first with `score`, `npv_cost`, `monthly`, `risk`, and `reasons`.
+3. Drill in: `kontu show <id> --json`, `kontu compare <id> <id> --json`, `kontu open <id>`.
+
+### B) Specific query → filter directly
+1. `kontu pull <municipality> [--type … --shore --price-max N]` (omit the municipality
+   to pull from all of Finland).
+2. `kontu list --municipality Outokumpu --price-max 120000 --shore oma_ranta --json`
+3. `kontu cost <id> --horizon 20 --json`, `kontu risk <id> --json`,
+   `kontu score <id> 85 --deal-breaker`, `kontu note <id> "…"`, `kontu open <id>`.
 
 ## Commands
-- `pull <municipality> [--price-max N] [--limit N]` — ingest REAL Oikotie listings for
-  a municipality from this machine's IP into the Worker. Run before `list` for a new
-  area, and to refresh. Idempotent (upserts; reports new/updated/skipped).
+- `spec` / `spec set <flags>` / `spec clear` — show/edit the saved house-hunting spec.
+  Read with `spec --json`. Flags: `--anywhere | --area <m>` (repeat), `--type <t>` (repeat),
+  `--price-max N --price-min N --min-plot-m2 N --min-m2 N --min-rooms N --year-min N`,
+  `--shore|--ev|--fiber|--privacy any|plus|required|avoid`, `--owned-plot --require-infra
+  --minimize-tco --max-dom N --horizon N --exclude <kw> --note "…"`.
+- `match [--pull] [--limit N] [--scan N]` — rank listings by fit to the spec, best first
+  (`score` 0–100; TCO-dominant + shore/privacy/ev/fiber/infra signals + risk; `reasons[]`
+  explains each). `--pull` refreshes listings for the spec from your IP first.
+- `pull [municipality] [--type <t>…] [--shore] [--price-max N] [--limit N]` — ingest REAL
+  Oikotie listings from this machine's IP into the Worker. Omit the municipality for ALL
+  of Finland (use filters). `--shore` = lakehouses only. Idempotent (upserts).
 - `list [filters] [--sort C] [--desc] [--limit N] [--json]` — exact-parameter search.
   Filters: `--municipality --type <omakotitalo|paritalo|rivitalo|kerrostalo|mökki>
   --holding <kiinteisto|asunto_osake> --price-min --price-max --m2-min --rooms-min
