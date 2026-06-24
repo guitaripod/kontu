@@ -23,6 +23,9 @@ pub struct Scored {
     pub score: f64,
     pub npv_cost: f64,
     pub monthly: f64,
+    /// Year-1 out-of-pocket running cost (heating, taxes, upkeep, insurance +
+    /// any loan interest), excluding equity-building principal: the "cost of living".
+    pub monthly_living: f64,
     pub risk: u32,
     pub reasons: Vec<String>,
 }
@@ -347,6 +350,7 @@ struct Candidate {
     signals: Signals,
     npv: f64,
     monthly: f64,
+    living: f64,
     risk: u32,
 }
 
@@ -362,12 +366,16 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
         let mut cs = CostState::from_defaults(defaults);
         cs.apply_listing(&l, &assessment, defaults);
         cs.horizon = spec.horizon_years;
+        if spec.cash {
+            cs.ltv = 0.0;
+        }
         let proj = cs.project(defaults);
         candidates.push(Candidate {
             listing: l,
             signals: s,
             npv: proj.npv_cost,
             monthly: proj.equivalent_monthly,
+            living: proj.years.first().map(|y| (y.recurring + y.interest) / 12.0).unwrap_or(0.0),
             risk: assessment.score,
         });
     }
@@ -418,6 +426,7 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
                 score,
                 npv_cost: c.npv,
                 monthly: c.monthly,
+                monthly_living: c.living,
                 risk: c.risk,
             }
         })

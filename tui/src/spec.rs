@@ -95,6 +95,9 @@ pub struct Spec {
     /// Good structural condition (move-in vs renovation-needed). `Required`
     /// hard-drops listings that clearly need major work / are renovation-era.
     pub condition: Pref,
+    /// Buy outright with no mortgage (LTV 0): the cost model charges no loan
+    /// interest, only running costs and the capital's opportunity cost.
+    pub cash: bool,
     /// Drive the ranking toward the lowest total cost of ownership.
     pub minimize_tco: bool,
     pub max_dom: Option<i64>,
@@ -126,6 +129,7 @@ impl Default for Spec {
             privacy: Pref::Any,
             winterized: Pref::Any,
             condition: Pref::Any,
+            cash: false,
             minimize_tco: false,
             max_dom: None,
             horizon_years: 20,

@@ -55,11 +55,14 @@ then run the workflow. If a spec was agreed earlier, reuse it instead of re-aski
   `--shore|--ev|--fiber|--privacy|--winterized|--condition any|plus|required|avoid`
   (`--winterized required` hard-drops summer-only mökki; `--condition required` drops
   clearly renovation-needed / unrenovated valesokkeli-era ~1960–85), `--owned-plot --require-infra
-  --minimize-tco --max-dom N --horizon N --exclude <kw> --note "…"`. The three bool flags
-  each have a `--no-…` form (`--no-owned-plot` etc.) to clear them without `spec clear`.
+  --cash --minimize-tco --max-dom N --horizon N --exclude <kw> --note "…"`. `--cash` models a
+  no-mortgage purchase (LTV 0) everywhere. The bool flags each have a `--no-…` form
+  (`--no-owned-plot`, `--no-cash`, …) to clear them without `spec clear`.
 - `match [--pull] [--limit N] [--scan N]` — rank listings by fit to the spec, best first
   (`score` 0–100; TCO-dominant + shore/privacy/ev/fiber/infra signals + risk; `reasons[]`
-  explains each). `--pull` refreshes listings for the spec from your IP first.
+  explains each). `--pull` refreshes listings for the spec from your IP first. `monthly`
+  is the opportunity-cost NPV equivalent; `monthly_living` is the year-1 running cost
+  (the everyday cost of living) — the table/alerts show the latter.
 - `watch [run|config|test|install|status]` — push new spec-matching listings to Telegram.
   Setup: `watch config --token <BotFather token>` → message the bot once →
   `watch config` (auto-detects the chat id) → `watch test` → `watch run --seed` (baseline,

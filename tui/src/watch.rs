@@ -62,10 +62,10 @@ pub fn format_alert(m: &Scored) -> String {
         format!("\n<i>{}</i>", escape(&m.reasons.join(", ")))
     };
     format!(
-        "🏠 <b>{title}</b>\n📍 {place}\n💶 {price} · ~{monthly} €/mo · risk {risk} · fit {fit:.0}{reasons}\n{url}",
+        "🏠 <b>{title}</b>\n📍 {place}\n💶 {price} · ~{living} €/mo to run · risk {risk} · fit {fit:.0}{reasons}\n{url}",
         title = escape(&m.title),
         place = escape(place),
-        monthly = m.monthly.round() as i64,
+        living = m.monthly_living.round() as i64,
         risk = m.risk,
         fit = m.score,
         url = escape(&m.url),
@@ -186,6 +186,7 @@ mod tests {
             score: 80.0,
             npv_cost: 0.0,
             monthly: 700.0,
+            monthly_living: 420.0,
             risk: 10,
             reasons: vec!["lakeshore".into()],
         };

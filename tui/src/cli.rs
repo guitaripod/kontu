@@ -237,6 +237,12 @@ pub struct SpecSetArgs {
     /// Good condition / move-in (not a renovation project): any|plus|required|avoid
     #[arg(long)]
     condition: Option<String>,
+    /// Buy outright with no mortgage (cost model uses LTV 0, no loan interest)
+    #[arg(long = "cash", overrides_with = "no_cash")]
+    cash: bool,
+    /// Model a mortgage instead of a cash purchase
+    #[arg(long = "no-cash")]
+    no_cash: bool,
     /// Rank toward the lowest total cost of ownership
     #[arg(long = "minimize-tco", overrides_with = "no_minimize_tco")]
     minimize_tco: bool,
@@ -312,6 +318,11 @@ impl SpecSetArgs {
         }
         if let Some(p) = &self.condition {
             s.condition = Pref::parse(p);
+        }
+        if self.cash {
+            s.cash = true;
+        } else if self.no_cash {
+            s.cash = false;
         }
         if self.minimize_tco {
             s.minimize_tco = true;
@@ -529,6 +540,7 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
             let assessment = assess(&detail);
             let mut cs = CostState::from_defaults(&defaults);
             cs.apply_listing(&detail.listing, &assessment, &defaults);
+            apply_spec_financing(&mut cs);
             let proj = cs.project(&defaults);
             if json {
                 emit(&json!({
@@ -552,6 +564,7 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
             let assessment = assess(&detail);
             let mut cs = CostState::from_defaults(&defaults);
             cs.apply_listing(&detail.listing, &assessment, &defaults);
+            apply_spec_financing(&mut cs);
             a.apply(&mut cs);
             let proj = cs.project(&defaults);
             if json {
@@ -581,6 +594,7 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
                 let assessment = assess(&detail);
                 let mut cs = CostState::from_defaults(&defaults);
                 cs.apply_listing(&detail.listing, &assessment, &defaults);
+                apply_spec_financing(&mut cs);
                 let proj = cs.project(&defaults);
                 rows.push((detail.listing, assessment.score, proj.npv_cost, proj.equivalent_monthly));
             }
@@ -933,7 +947,7 @@ fn print_matches(top: &[crate::matching::Scored]) {
     }
     println!(
         "{:>6} {:>4} {:<22} {:<13} {:>9} {:>4} {:>8}  WHY",
-        "ID", "FIT", "PLACE", "WHERE", "PRICE", "RSK", "€/MO"
+        "ID", "FIT", "PLACE", "WHERE", "PRICE", "RSK", "€/MO*"
     );
     for m in top {
         println!(
@@ -944,11 +958,11 @@ fn print_matches(top: &[crate::matching::Scored]) {
             trunc(m.municipality.as_deref().unwrap_or("?"), 13),
             money_opt(m.price_eur),
             m.risk,
-            money(m.monthly),
+            money(m.monthly_living),
             m.reasons.join(", "),
         );
     }
-    println!("open one with: kontu open <id>");
+    println!("* €/MO = monthly running cost (cost of living). open one with: kontu open <id>");
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1027,6 +1041,9 @@ fn print_spec(s: &Spec) {
     if s.minimize_tco {
         flags.push("minimize-TCO");
     }
+    if s.cash {
+        flags.push("cash-purchase");
+    }
     if !flags.is_empty() {
         println!("flags      {}", flags.join(", "));
     }
@@ -1076,6 +1093,14 @@ async fn risk_sorted_page(
     });
     page.listings.truncate(limit as usize);
     Ok(page)
+}
+
+/// Apply the saved spec's financing stance (cash purchase → LTV 0, no loan
+/// interest) as the cost-model default, so drill-downs match how `match` ranked.
+fn apply_spec_financing(cs: &mut CostState) {
+    if Spec::load().map(|s| s.cash).unwrap_or(false) {
+        cs.ltv = 0.0;
+    }
 }
 
 fn assess(detail: &ListingDetail) -> RiskAssessment {
