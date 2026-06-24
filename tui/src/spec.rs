@@ -98,6 +98,9 @@ pub struct Spec {
     /// Buy outright with no mortgage (LTV 0): the cost model charges no loan
     /// interest, only running costs and the capital's opportunity cost.
     pub cash: bool,
+    /// Telegram watch only alerts on matches scoring at least this fit (0–100).
+    /// Set near your benchmark houses' fit so only comparably good homes ping.
+    pub alert_min_fit: f64,
     /// Drive the ranking toward the lowest total cost of ownership.
     pub minimize_tco: bool,
     pub max_dom: Option<i64>,
@@ -130,6 +133,7 @@ impl Default for Spec {
             winterized: Pref::Any,
             condition: Pref::Any,
             cash: false,
+            alert_min_fit: 55.0,
             minimize_tco: false,
             max_dom: None,
             horizon_years: 20,

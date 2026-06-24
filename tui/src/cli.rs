@@ -136,9 +136,9 @@ pub struct WatchRunArgs {
     /// Skip the fresh pull and rank already-ingested listings
     #[arg(long)]
     no_pull: bool,
-    /// Only alert on matches scoring at least this fit (0–100)
-    #[arg(long, default_value_t = 55.0)]
-    min_fit: f64,
+    /// Override the spec's alert fit threshold (0–100) for this run
+    #[arg(long)]
+    min_fit: Option<f64>,
     /// Listings scanned per area before ranking
     #[arg(long, default_value_t = 800)]
     scan: usize,
@@ -268,6 +268,9 @@ pub struct SpecSetArgs {
     /// Cost-model horizon in years
     #[arg(long)]
     horizon: Option<u32>,
+    /// Telegram alert fit threshold (0–100); only homes scoring ≥ this ping you
+    #[arg(long = "alert-min-fit")]
+    alert_min_fit: Option<f64>,
     /// Exclude listings matching this keyword (repeatable)
     #[arg(long = "exclude")]
     exclude: Vec<String>,
@@ -348,6 +351,9 @@ impl SpecSetArgs {
         }
         if let Some(v) = self.horizon {
             s.horizon_years = v;
+        }
+        if let Some(v) = self.alert_min_fit {
+            s.alert_min_fit = v;
         }
         if !self.exclude.is_empty() {
             s.exclude = self.exclude.clone();
@@ -874,10 +880,11 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
         pull_spec(client, &spec, a.scan).await;
     }
     let defaults = client.cost_defaults().await.unwrap_or_default();
+    let min_fit = a.min_fit.unwrap_or(spec.alert_min_fit);
     let listings = fetch_spec_listings(client, &spec, a.scan).await?;
     let matches: Vec<_> = crate::matching::rank(&spec, listings, &defaults)
         .into_iter()
-        .filter(|m| m.score >= a.min_fit)
+        .filter(|m| m.score >= min_fit)
         .collect();
 
     let mut seen = watch::load_seen()?;
@@ -1070,6 +1077,8 @@ fn print_spec(s: &Spec) {
     if s.cash {
         flags.push("cash-purchase");
     }
+    let alert = format!("alert ≥ fit {:.0}", s.alert_min_fit);
+    flags.push(&alert);
     if !flags.is_empty() {
         println!("flags      {}", flags.join(", "));
     }
