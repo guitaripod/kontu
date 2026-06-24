@@ -5,6 +5,7 @@ import {
   etuoviPhotoUrls,
   extractRiskStructures,
   fingerprint,
+  isForeignListing,
   normalizeEtuoviAnnouncement,
   normalizeOikotieCard,
   normalizePropertyType,
@@ -258,6 +259,12 @@ describe("normalizeEtuoviAnnouncement", () => {
     expect(n.price_per_m2).toBeNull();
   });
 
+  it("treats a sub-€1000 placeholder price (€1 auction/by-offer) as price-on-request", () => {
+    expect(normalizeEtuoviAnnouncement({ friendlyId: "z", searchPrice: 1 }).price_eur).toBeNull();
+    expect(normalizeOikotieCard({ id: "z", price: "1 €" }).price_eur).toBeNull();
+    expect(normalizeOikotieCard({ id: "z", price: "25 000 €" }).price_eur).toBe(25000);
+  });
+
   it("never throws on empty/garbage input", () => {
     expect(() => normalizeEtuoviAnnouncement(null)).not.toThrow();
     expect(() => normalizeEtuoviAnnouncement({})).not.toThrow();
@@ -297,6 +304,17 @@ describe("cover photo extraction", () => {
     ]);
     expect(etuoviPhotoUrls({ mainImageUri: "//x/y.jpg", mainImageHidden: true })).toEqual([]);
     expect(etuoviPhotoUrls({})).toEqual([]);
+  });
+});
+
+describe("isForeignListing", () => {
+  it("drops non-Finnish listings, keeps Finnish ones", () => {
+    expect(isForeignListing("Viro", null)).toBe(true); // Etuovi Estonian
+    expect(isForeignListing("Helsinki", "Philippines")).toBe(true); // Oikotie foreign country
+    expect(isForeignListing("Espanja", null)).toBe(true);
+    expect(isForeignListing("Outokumpu", "Suomi")).toBe(false);
+    expect(isForeignListing("Järvenpää", null)).toBe(false); // Etuovi Finnish, no country
+    expect(isForeignListing("Helsinki", "Finnland")).toBe(false); // German spelling of Finland
   });
 });
 

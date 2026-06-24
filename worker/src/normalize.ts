@@ -153,6 +153,15 @@ function positiveOrNull(n: number | null): number | null {
   return n != null && n > 0 ? n : null;
 }
 
+/** No habitable Finnish property sells below this; lower values are auction
+ *  starting-bid / "by offer" placeholders (notably from Etuovi's thin listpage). */
+const MIN_REAL_PRICE_EUR = 1000;
+
+/** A real asking price, or null when it's a sub-€1000 placeholder = price-on-request. */
+function realPriceOrNull(n: number | null): number | null {
+  return n != null && n >= MIN_REAL_PRICE_EUR ? n : null;
+}
+
 function firstString(...vals: unknown[]): string | null {
   for (const v of vals) {
     if (typeof v === "string") {
@@ -413,7 +422,7 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     district: firstString(get(c, "buildingData.district"), c["district"], get(c, "location.district")),
     lat: toNumber(firstString(get(c, "coordinates.latitude"), get(c, "location.lat"), c["latitude"])),
     lon: toNumber(firstString(get(c, "coordinates.longitude"), get(c, "location.lng"), c["longitude"])),
-    price_eur: positiveOrNull(toInt(priceText)),
+    price_eur: realPriceOrNull(toInt(priceText)),
     debt_free_price_eur: toInt(firstString(c["debtFreePrice"], get(c, "data.debtFreePrice"))),
     debt_share_eur: toInt(firstString(c["debtShare"], get(c, "data.debt"))),
     price_per_m2: positiveOrNull(toNumber(firstString(c["pricePerSquare"], c["pricePerM2"]))),
@@ -455,6 +464,34 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     raw_json: safeStringify(card),
   };
   return row;
+}
+
+const FINNISH_COUNTRY = /^(suomi|finland|finnland)$/i;
+
+/** Country/region names that leak in as a "municipality" for foreign listings. */
+const FOREIGN_MUNICIPALITIES = new Set([
+  "viro", "eesti", "estonia", "espanja", "spain", "ruotsi", "sweden", "sverige",
+  "norja", "norway", "thaimaa", "thailand", "ranska", "france", "philippines",
+  "filippiinit", "portugali", "portugal", "kreikka", "greece", "italia", "italy",
+  "turkki", "turkey", "bulgaria", "unkari", "hungary", "kypros", "cyprus",
+]);
+
+/** Oikotie `buildingData.country` (absent for Etuovi). */
+export function oikotieCountry(card: unknown): string | null {
+  const c = (card ?? {}) as Record<string, unknown>;
+  return firstString(get(c, "buildingData.country"), c["country"]);
+}
+
+/**
+ * True when a normalized listing is outside Finland: an Oikotie card with a
+ * non-Finnish `country`, or any listing whose municipality is a country name.
+ * Keeps a Finland-only search free of Baltic/Mediterranean listings.
+ */
+export function isForeignListing(municipality: string | null, country: string | null): boolean {
+  if (country != null && country.trim() !== "" && !FINNISH_COUNTRY.test(country.trim())) {
+    return true;
+  }
+  return FOREIGN_MUNICIPALITIES.has(asciiFold(municipality));
 }
 
 /** Cover-image URL(s) for an Oikotie card (already absolute https CDN links). */
@@ -550,7 +587,7 @@ export function normalizeEtuoviAnnouncement(announcement: unknown): NormalizedLi
     district: withoutLastToken(addressLine2),
     lat: toNumber(firstString(a["latitude"], get(a, "coordinates.latitude"))),
     lon: toNumber(firstString(a["longitude"], get(a, "coordinates.longitude"))),
-    price_eur: positiveOrNull(toInt(firstString(a["searchPrice"], a["price"], a["sellingPrice"]))),
+    price_eur: realPriceOrNull(toInt(firstString(a["searchPrice"], a["price"], a["sellingPrice"]))),
     debt_free_price_eur: toInt(firstString(a["debtFreePrice"], a["unencumberedSalesPrice"])),
     debt_share_eur: toInt(firstString(a["debtShare"], a["shareOfLiabilities"])),
     price_per_m2: positiveOrNull(toNumber(firstString(a["pricePerSquareMeter"], a["pricePerM2"]))),

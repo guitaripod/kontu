@@ -42,6 +42,7 @@ pub struct Weights {
     pub ev: f64,
     pub fiber: f64,
     pub infra: f64,
+    pub winter: f64,
     pub risk: f64,
 }
 
@@ -51,6 +52,7 @@ impl Default for Weights {
             tco: 0.40,
             shore: 0.20,
             privacy: 0.12,
+            winter: 0.10,
             infra: 0.08,
             ev: 0.07,
             risk: 0.08,
@@ -85,6 +87,9 @@ pub struct Spec {
     pub fiber: Pref,
     /// Not direct neighbours (privacy / rural).
     pub privacy: Pref,
+    /// Year-round liveable (talviasuttava) rather than a summer-only mökki.
+    /// `Required` hard-drops listings that are clearly summer-only.
+    pub winterized: Pref,
     /// Drive the ranking toward the lowest total cost of ownership.
     pub minimize_tco: bool,
     pub max_dom: Option<i64>,
@@ -114,6 +119,7 @@ impl Default for Spec {
             ev_charging: Pref::Any,
             fiber: Pref::Any,
             privacy: Pref::Any,
+            winterized: Pref::Any,
             minimize_tco: false,
             max_dom: None,
             horizon_years: 20,

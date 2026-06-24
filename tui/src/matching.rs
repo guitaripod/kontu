@@ -33,6 +33,7 @@ struct Signals {
     ev: f64,
     fiber: f64,
     infra: f64,
+    winter: f64,
 }
 
 fn has(text: &str, needles: &[&str]) -> bool {
@@ -136,6 +137,50 @@ fn infra_signal(l: &Listing, desc: &str) -> f64 {
     s
 }
 
+/// Year-round liveability: 1.0 = clearly winterized, ~0.1 = clearly summer-only.
+/// Explicit text wins; otherwise a non-leisure house is year-round by construction,
+/// while a mökki is inferred from central heating and plumbed (not carried) water.
+fn winter_signal(l: &Listing, desc: &str) -> f64 {
+    if has(desc, &["ei talviasut", "vain kesä", "kesäkäyt", "kesämök", "kesäasun", "kesahuvila", "ei lämmi"]) {
+        return 0.1;
+    }
+    if has(desc, &["talviasutt", "ympärivuoti", "ympäri vuoden", "talvikäyt", "talviasun"]) {
+        return 1.0;
+    }
+    let is_house = l
+        .property_type
+        .as_deref()
+        .map(|t| {
+            t.contains("omakoti")
+                || t.contains("pari")
+                || t.contains("rivi")
+                || t.contains("kerros")
+                || t.contains("erillis")
+        })
+        .unwrap_or(false);
+    if is_house {
+        return 0.9;
+    }
+    if has(desc, &["kantovesi", "ei vesijoht", "ei sähkö", "ulkohuussi", "kuivakäymälä"]) {
+        return 0.2;
+    }
+    let real_heat = l
+        .heating_type
+        .as_deref()
+        .map(|h| {
+            h.contains("kaukolämp")
+                || h.contains("maalämp")
+                || h.contains("öljy")
+                || h.contains("ivlp")
+                || h.contains("ilmavesi")
+        })
+        .unwrap_or(false);
+    if real_heat || has(desc, &["lämmin vesi", "eristett", "talvella"]) {
+        return 0.7;
+    }
+    0.4
+}
+
 fn signals(l: &Listing) -> Signals {
     let desc = l
         .description
@@ -148,6 +193,7 @@ fn signals(l: &Listing) -> Signals {
         ev: ev_signal(l, &desc),
         fiber: fiber_signal(&desc, l),
         infra: infra_signal(l, &desc),
+        winter: winter_signal(l, &desc),
     }
 }
 
@@ -246,7 +292,13 @@ fn passes_hard(spec: &Spec, l: &Listing, s: &Signals) -> bool {
         || pref_excludes(spec.ev_charging, s.ev)
         || pref_excludes(spec.fiber, s.fiber)
         || pref_excludes(spec.privacy, s.privacy)
+        || pref_excludes(spec.winterized, s.winter)
     {
+        return false;
+    }
+    // Unlike the free-text soft signals, a clearly summer-only listing is a real
+    // disqualifier for a year-round home, so Required hard-drops it.
+    if matches!(spec.winterized, Pref::Required) && s.winter < 0.3 {
         return false;
     }
     if spec.require_infra && s.infra < 0.25 {
@@ -295,8 +347,9 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
     let wp = pref_weight(spec.privacy, w.privacy);
     let we = pref_weight(spec.ev_charging, w.ev);
     let wf = pref_weight(spec.fiber, w.fiber);
+    let ww = pref_weight(spec.winterized, w.winter);
     let wi = if spec.require_infra { w.infra * 1.5 } else { w.infra };
-    let total_w = (wtco + ws + wp + we + wf + wi + w.risk).max(1e-9);
+    let total_w = (wtco + ws + wp + we + wf + ww + wi + w.risk).max(1e-9);
 
     let mut scored: Vec<Scored> = candidates
         .into_iter()
@@ -312,6 +365,7 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
                 + wp * pref_signal(spec.privacy, c.signals.privacy)
                 + we * pref_signal(spec.ev_charging, c.signals.ev)
                 + wf * pref_signal(spec.fiber, c.signals.fiber)
+                + ww * pref_signal(spec.winterized, c.signals.winter)
                 + wi * c.signals.infra
                 + w.risk * risk_score)
                 / total_w
@@ -351,6 +405,11 @@ fn reasons(c: &Candidate, tco: f64) -> Vec<String> {
             r.push("private".into());
         }
     }
+    if c.signals.winter >= 0.9 {
+        r.push("year-round".into());
+    } else if c.signals.winter <= 0.2 {
+        r.push("summer-only?".into());
+    }
     if c.signals.fiber >= 1.0 {
         r.push("fibre".into());
     }
@@ -386,5 +445,24 @@ mod tests {
         assert_eq!(pref_signal(Pref::Avoid, 1.0), 0.0);
         assert_eq!(pref_signal(Pref::Avoid, 0.0), 1.0);
         assert_eq!(pref_signal(Pref::Required, 1.0), 1.0);
+    }
+
+    #[test]
+    fn winter_signal_separates_year_round_from_summer() {
+        let ws = |l: &Listing| winter_signal(l, &l.description.clone().unwrap_or_default().to_lowercase());
+        let summer = Listing {
+            description: Some("Ihana kesämökki järven rannalla, kantovesi ja puulämmitys.".into()),
+            property_type: Some("mökki".into()),
+            ..Default::default()
+        };
+        let year_round = Listing {
+            description: Some("Talviasuttava mökki, maalämpö ja kunnallinen vesi.".into()),
+            property_type: Some("mökki".into()),
+            ..Default::default()
+        };
+        let house = Listing { property_type: Some("omakotitalo".into()), ..Default::default() };
+        assert!(ws(&summer) <= 0.2, "kesämökki + kantovesi reads summer-only");
+        assert!(ws(&year_round) >= 0.9, "talviasuttava reads year-round");
+        assert!(ws(&house) >= 0.9, "a detached house is year-round by construction");
     }
 }

@@ -231,6 +231,9 @@ pub struct SpecSetArgs {
     /// Not direct neighbours: any|plus|required|avoid
     #[arg(long)]
     privacy: Option<String>,
+    /// Year-round liveable, not a summer mökki: any|plus|required|avoid
+    #[arg(long)]
+    winterized: Option<String>,
     /// Rank toward the lowest total cost of ownership
     #[arg(long = "minimize-tco", overrides_with = "no_minimize_tco")]
     minimize_tco: bool,
@@ -300,6 +303,9 @@ impl SpecSetArgs {
         }
         if let Some(p) = &self.privacy {
             s.privacy = Pref::parse(p);
+        }
+        if let Some(p) = &self.winterized {
+            s.winterized = Pref::parse(p);
         }
         if self.minimize_tco {
             s.minimize_tco = true;
@@ -1003,7 +1009,7 @@ fn print_spec(s: &Spec) {
     println!("areas      {areas}");
     println!("price      {} – {}", money_opt(s.price_min), money_opt(s.price_max));
     println!("type       {types}");
-    println!("shore      {:?}", s.shore);
+    println!("shore      {:?}   winterized {:?}", s.shore, s.winterized);
     println!("privacy    {:?}   ev {:?}   fiber {:?}", s.privacy, s.ev_charging, s.fiber);
     let mut flags = Vec::new();
     if s.owned_plot {

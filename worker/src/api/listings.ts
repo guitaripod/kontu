@@ -42,6 +42,8 @@ import {
   normalizeEtuoviAnnouncement,
   oikotiePhotoUrls,
   etuoviPhotoUrls,
+  oikotieCountry,
+  isForeignListing,
 } from "../normalize";
 import { computeFairness, loadMedians, marketIsStale, refreshMarketStats } from "../fairprice";
 
@@ -151,6 +153,10 @@ api.post("/import", async (c) => {
     try {
       const n = normalize(item);
       if (!n.portal_listing_id) {
+        skipped++;
+        continue;
+      }
+      if (isForeignListing(n.municipality, isEtuovi ? null : oikotieCountry(item))) {
         skipped++;
         continue;
       }
