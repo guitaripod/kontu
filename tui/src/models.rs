@@ -90,6 +90,9 @@ pub struct Listing {
     /// Actual annual property tax (kiinteistövero) from the listing detail page.
     #[serde(default)]
     pub kiinteistovero_eur_yr: Option<i64>,
+    /// Actual average yearly electricity spend (the real total energy bill).
+    #[serde(default)]
+    pub electricity_eur_yr: Option<i64>,
     #[serde(default)]
     pub condition_class: Option<String>,
     #[serde(default)]

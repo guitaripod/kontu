@@ -87,19 +87,24 @@ pub fn recurring_lines(
         return lines;
     }
 
+    // When the listing's actual average-electricity figure is known, it IS the
+    // real total energy bill (electric heating is in it; wood is self-supplied),
+    // so it replaces the separate heating estimate rather than adding to it.
+    let actual_energy = p.electricity_eur_yr;
+    let heating0 = if actual_energy.is_some() { 0.0 } else { p.heating.annual_cost(d) };
     let mut lines = vec![
         RecurringLine { name: "kiinteistovero", annual0: kiinteistovero, inflation: g },
         RecurringLine { name: "insurance", annual0: p.insurance_eur_yr.unwrap_or(d.insurance_eur_yr), inflation: g },
-        RecurringLine { name: "heating", annual0: p.heating.annual_cost(d), inflation: e },
+        RecurringLine { name: "heating", annual0: heating0, inflation: e },
         RecurringLine { name: "water", annual0: p.water.annual_cost(d), inflation: e },
         RecurringLine { name: "waste", annual0: d.waste_eur_yr, inflation: g },
         RecurringLine { name: "broadband", annual0: d.broadband_eur_yr, inflation: g },
         RecurringLine { name: "maintenance_reserve", annual0: building_value * d.maintenance_reserve_pct, inflation: g },
     ];
-    if !p.heating.electricity_included() {
+    if actual_energy.is_some() || !p.heating.electricity_included() {
         lines.push(RecurringLine {
             name: "electricity",
-            annual0: p.electricity_eur_yr.unwrap_or(d.electricity_eur_yr),
+            annual0: actual_energy.unwrap_or(d.electricity_eur_yr),
             inflation: e,
         });
     }

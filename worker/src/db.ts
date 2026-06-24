@@ -40,6 +40,7 @@ export interface ListingRow {
   pipes_renovated_year: number | null;
   water_body: string | null;
   kiinteistovero_eur_yr: number | null;
+  electricity_eur_yr: number | null;
   condition_class: string | null;
   inspection_status: string | null;
   frame_material: string | null;
@@ -419,6 +420,7 @@ const LISTING_COLUMNS = [
   "pipes_renovated_year",
   "water_body",
   "kiinteistovero_eur_yr",
+  "electricity_eur_yr",
   "condition_class",
   "inspection_status",
   "frame_material",
@@ -483,6 +485,7 @@ function listingValues(n: NormalizedListing, propertyId: number | null, hash: st
     n.pipes_renovated_year,
     n.water_body,
     n.kiinteistovero_eur_yr,
+    n.electricity_eur_yr,
     n.condition_class,
     n.inspection_status,
     n.frame_material,
@@ -595,7 +598,7 @@ export async function upsertListing(db: D1Database, n: NormalizedListing): Promi
         "debt_free_price_eur = ?, debt_share_eur = ?, price_per_m2 = ?, maintenance_charge_eur = ?, " +
         "financing_charge_eur = ?, ground_rent_eur_yr = ?, living_area_m2 = ?, total_area_m2 = ?, plot_area_m2 = ?, " +
         "room_count = ?, room_layout = ?, floors = ?, year_built = ?, occupancy_year = ?, " +
-        "roof_year = ?, pipes_renovated_year = ?, water_body = ?, kiinteistovero_eur_yr = ?, condition_class = ?, " +
+        "roof_year = ?, pipes_renovated_year = ?, water_body = ?, kiinteistovero_eur_yr = ?, electricity_eur_yr = ?, condition_class = ?, " +
         "inspection_status = ?, frame_material = ?, facade_material = ?, roof_material = ?, energy_class = ?, " +
         "e_value = ?, risk_structures = ?, plot_ownership = ?, lease_end_year = ?, shore = ?, shore_sauna = ?, " +
         "heating_type = ?, heat_distribution = ?, water_supply = ?, sewer_system = ?, broadband = ?, sauna = ?, " +
@@ -633,6 +636,7 @@ export async function upsertListing(db: D1Database, n: NormalizedListing): Promi
       n.pipes_renovated_year,
       n.water_body,
       n.kiinteistovero_eur_yr,
+      n.electricity_eur_yr,
       n.condition_class,
       n.inspection_status,
       n.frame_material,

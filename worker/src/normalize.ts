@@ -40,6 +40,7 @@ export interface NormalizedListing {
   pipes_renovated_year: number | null;
   water_body: string | null;
   kiinteistovero_eur_yr: number | null;
+  electricity_eur_yr: number | null;
   condition_class: string | null;
   inspection_status: string | null;
   frame_material: string | null;
@@ -445,6 +446,7 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     pipes_renovated_year: null,
     water_body: null,
     kiinteistovero_eur_yr: null,
+    electricity_eur_yr: null,
     condition_class: firstString(c["condition"], c["conditionClass"]),
     inspection_status: firstString(c["inspectionStatus"]),
     frame_material: firstString(c["frameMaterial"]),
@@ -504,6 +506,13 @@ function euroAmount(raw: unknown): number | null {
   if (typeof raw !== "string") return null;
   const m = raw.replace(/\s/g, "").replace(",", ".").match(/-?\d+(\.\d+)?/);
   return m ? Math.round(Number(m[0])) : null;
+}
+
+/** A "X € / kk" or "X € / v" figure normalized to euros per YEAR. */
+function euroPerYear(raw: unknown): number | null {
+  const eur = euroAmount(raw);
+  if (eur === null) return null;
+  return typeof raw === "string" && /\/\s*kk|kuukau/i.test(raw) ? eur * 12 : eur;
 }
 
 /** First 4-digit year in a string (e.g. a renovation note "Kattoremontti 2023"). */
@@ -573,6 +582,7 @@ function applyOikotieDetail(row: NormalizedListing, c: Record<string, unknown>):
   }
   set("year_built", toInt(dv("Rakennusvuosi")) ?? row.year_built);
   set("kiinteistovero_eur_yr", euroAmount(dv("Kiinteistövero")));
+  set("electricity_eur_yr", euroPerYear(dv("Keskimääräinen sähkönkulutus")));
   set("roof_year", firstYear(dv("Kattoremontti")));
   set("pipes_renovated_year", pipeRenovationYear(dv("Tehdyt remontit")) ?? pipeRenovationYear(full));
   // Only the explicit "oma ranta" literal asserts owned shore; a rantasauna can sit
@@ -720,6 +730,7 @@ export function normalizeEtuoviAnnouncement(announcement: unknown): NormalizedLi
     pipes_renovated_year: null,
     water_body: null,
     kiinteistovero_eur_yr: null,
+    electricity_eur_yr: null,
     condition_class: firstString(a["condition"], a["conditionClassType"]),
     inspection_status: firstString(a["inspectionStatus"]),
     frame_material: firstString(a["frameMaterial"]),

@@ -349,6 +349,20 @@ describe("oikotie detail enrichment", () => {
     expect(n.description).toContain("valokuitu");
   });
 
+  it("parses property tax + normalizes electricity (€/kk → €/v)", () => {
+    const monthly = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      details: { "Kiinteistövero": "317,01 € / v", "Keskimääräinen sähkönkulutus": "160 € / kk" },
+    });
+    expect(monthly.kiinteistovero_eur_yr).toBe(317);
+    expect(monthly.electricity_eur_yr).toBe(1920); // 160 €/kk × 12
+    const yearly = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      details: { "Keskimääräinen sähkönkulutus": "700 € / v" },
+    });
+    expect(yearly.electricity_eur_yr).toBe(700);
+  });
+
   it("leaves fields untouched when no detail is present", () => {
     const n = normalizeOikotieCard({ id: "y", buildingData: { buildingType: 4, year: 2000 } });
     expect(n.water_body).toBeNull();

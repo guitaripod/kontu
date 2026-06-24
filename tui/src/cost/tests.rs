@@ -258,6 +258,19 @@ fn leisure_kiinteistovero_exceeds_permanent() {
 }
 
 #[test]
+fn actual_electricity_replaces_heating_estimate_no_double_count() {
+    let d = CostDefaults::default();
+    let m = sample_model();
+    let mut p = sample_property();
+    p.electricity_eur_yr = Some(700.0);
+    let lines = recurring_lines(&p, &m, &d, 140_000.0, 900.0);
+    let heating = lines.iter().find(|l| l.name == "heating").map(|l| l.annual0).unwrap_or(-1.0);
+    let elec = lines.iter().find(|l| l.name == "electricity").map(|l| l.annual0);
+    assert_eq!(heating, 0.0, "actual energy figure replaces the heating estimate");
+    assert_eq!(elec, Some(700.0), "the actual electricity figure is used verbatim");
+}
+
+#[test]
 fn apartment_vastike_replaces_owner_upkeep_lines_no_double_count() {
     let d = CostDefaults::default();
     let m = sample_model();

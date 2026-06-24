@@ -39,6 +39,11 @@ pub struct CostState {
     pub private_road: bool,
     pub ground_rent: f64,
     pub vastike: f64,
+    /// Actual total energy bill (€/yr); when set, replaces the modelled heating
+    /// + electricity estimate. `None` falls back to the defaults.
+    pub electricity: Option<f64>,
+    /// Actual annual property tax (€/yr); `None` falls back to the estimate.
+    pub kiinteistovero: Option<f64>,
     pub horizon: u32,
     pub real_discount: f64,
     pub general_inflation: f64,
@@ -70,6 +75,8 @@ impl CostState {
             private_road: false,
             ground_rent: 0.0,
             vastike: 0.0,
+            electricity: None,
+            kiinteistovero: None,
             horizon: 20,
             real_discount: d.discount_rate_real,
             general_inflation: d.general_inflation,
@@ -99,6 +106,8 @@ impl CostState {
         self.ground_rent = l.ground_rent_eur_yr.map(|v| v as f64).unwrap_or(0.0);
         self.vastike =
             (l.maintenance_charge_eur.unwrap_or(0) + l.financing_charge_eur.unwrap_or(0)) as f64;
+        self.electricity = l.electricity_eur_yr.map(|v| v as f64);
+        self.kiinteistovero = l.kiinteistovero_eur_yr.map(|v| v as f64);
         self.private_road = l
             .road_access
             .as_deref()
@@ -136,9 +145,9 @@ impl CostState {
             ground_rent_eur_yr: self.ground_rent,
             vastike_eur_mo: self.vastike,
             is_apartment: matches!(self.holding_form, HoldingForm::AsuntoOsake),
-            kiinteistovero_eur_yr: None,
+            kiinteistovero_eur_yr: self.kiinteistovero,
             insurance_eur_yr: None,
-            electricity_eur_yr: None,
+            electricity_eur_yr: self.electricity,
             capex: self.capex.clone(),
         };
         let model = cost::ModelInputs {
