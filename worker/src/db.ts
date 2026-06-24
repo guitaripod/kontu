@@ -433,6 +433,7 @@ const LISTING_COLUMNS = [
   "road_access",
   "intended_use",
   "zoning_status",
+  "description",
   "status",
   "raw_json",
   "content_hash",
@@ -492,6 +493,7 @@ function listingValues(n: NormalizedListing, propertyId: number | null, hash: st
     n.road_access,
     n.intended_use,
     n.zoning_status,
+    n.description,
     n.status,
     n.raw_json,
     hash,
@@ -584,7 +586,7 @@ export async function upsertListing(db: D1Database, n: NormalizedListing): Promi
         "inspection_status = ?, frame_material = ?, facade_material = ?, roof_material = ?, energy_class = ?, " +
         "e_value = ?, risk_structures = ?, plot_ownership = ?, lease_end_year = ?, shore = ?, shore_sauna = ?, " +
         "heating_type = ?, heat_distribution = ?, water_supply = ?, sewer_system = ?, broadband = ?, sauna = ?, " +
-        "parking = ?, road_access = ?, intended_use = ?, zoning_status = ?, status = ?, raw_json = ?, " +
+        "parking = ?, road_access = ?, intended_use = ?, zoning_status = ?, description = ?, status = ?, raw_json = ?, " +
         "content_hash = ?, last_seen = ? WHERE id = ?",
     )
     .bind(
@@ -636,6 +638,7 @@ export async function upsertListing(db: D1Database, n: NormalizedListing): Promi
       n.road_access,
       n.intended_use,
       n.zoning_status,
+      n.description,
       n.status,
       n.raw_json,
       hash,

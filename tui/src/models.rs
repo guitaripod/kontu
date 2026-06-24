@@ -134,6 +134,8 @@ pub struct Listing {
 
     #[serde(default)]
     pub days_on_market: Option<i64>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 fn default_status() -> String {

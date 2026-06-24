@@ -60,6 +60,7 @@ export interface NormalizedListing {
   road_access: string | null;
   intended_use: string | null;
   zoning_status: string | null;
+  description: string | null;
 
   status: string;
   raw_json: string;
@@ -433,6 +434,7 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     road_access: firstString(c["roadAccess"]),
     intended_use: firstString(c["intendedUse"]),
     zoning_status: firstString(c["zoning"], c["zoningStatus"]),
+    description: description || null,
     status,
     raw_json: safeStringify(card),
   };
@@ -523,6 +525,7 @@ export function normalizeEtuoviAnnouncement(announcement: unknown): NormalizedLi
     road_access: firstString(a["roadAccess"], a["access"]),
     intended_use: firstString(a["intendedUse"], a["usage"]),
     zoning_status: firstString(a["zoning"], a["planningSituation"]),
+    description: description || null,
     status: mapEtuoviStatus(a["status"] ?? a["announcementState"]),
     raw_json: safeStringify(announcement),
   };
