@@ -36,6 +36,9 @@ export interface ListingRow {
   floors: number | null;
   year_built: number | null;
   occupancy_year: number | null;
+  roof_year: number | null;
+  pipes_renovated_year: number | null;
+  water_body: string | null;
   condition_class: string | null;
   inspection_status: string | null;
   frame_material: string | null;
@@ -411,6 +414,9 @@ const LISTING_COLUMNS = [
   "floors",
   "year_built",
   "occupancy_year",
+  "roof_year",
+  "pipes_renovated_year",
+  "water_body",
   "condition_class",
   "inspection_status",
   "frame_material",
@@ -471,6 +477,9 @@ function listingValues(n: NormalizedListing, propertyId: number | null, hash: st
     n.floors,
     n.year_built,
     n.occupancy_year,
+    n.roof_year,
+    n.pipes_renovated_year,
+    n.water_body,
     n.condition_class,
     n.inspection_status,
     n.frame_material,
@@ -582,7 +591,8 @@ export async function upsertListing(db: D1Database, n: NormalizedListing): Promi
         "address = ?, municipality = ?, postal_code = ?, district = ?, lat = ?, lon = ?, price_eur = ?, " +
         "debt_free_price_eur = ?, debt_share_eur = ?, price_per_m2 = ?, maintenance_charge_eur = ?, " +
         "financing_charge_eur = ?, ground_rent_eur_yr = ?, living_area_m2 = ?, total_area_m2 = ?, plot_area_m2 = ?, " +
-        "room_count = ?, room_layout = ?, floors = ?, year_built = ?, occupancy_year = ?, condition_class = ?, " +
+        "room_count = ?, room_layout = ?, floors = ?, year_built = ?, occupancy_year = ?, " +
+        "roof_year = ?, pipes_renovated_year = ?, water_body = ?, condition_class = ?, " +
         "inspection_status = ?, frame_material = ?, facade_material = ?, roof_material = ?, energy_class = ?, " +
         "e_value = ?, risk_structures = ?, plot_ownership = ?, lease_end_year = ?, shore = ?, shore_sauna = ?, " +
         "heating_type = ?, heat_distribution = ?, water_supply = ?, sewer_system = ?, broadband = ?, sauna = ?, " +
@@ -616,6 +626,9 @@ export async function upsertListing(db: D1Database, n: NormalizedListing): Promi
       n.floors,
       n.year_built,
       n.occupancy_year,
+      n.roof_year,
+      n.pipes_renovated_year,
+      n.water_body,
       n.condition_class,
       n.inspection_status,
       n.frame_material,

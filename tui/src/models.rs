@@ -81,6 +81,13 @@ pub struct Listing {
     #[serde(default)]
     pub occupancy_year: Option<i32>,
     #[serde(default)]
+    pub roof_year: Option<i32>,
+    #[serde(default)]
+    pub pipes_renovated_year: Option<i32>,
+    /// Water-body type for shore listings: jarvi (lake) | joki (river) | meri | lampi.
+    #[serde(default)]
+    pub water_body: Option<String>,
+    #[serde(default)]
     pub condition_class: Option<String>,
     #[serde(default)]
     pub inspection_status: Option<String>,
@@ -204,7 +211,7 @@ impl Listing {
             risk_structures: self.risk_structures.clone(),
             heating: self.heating_type.clone(),
             roof_material: self.roof_material.clone(),
-            roof_year: None,
+            roof_year: self.roof_year,
             condition_class: self.condition_class.clone(),
             inspection_done: self
                 .inspection_status
@@ -216,9 +223,9 @@ impl Listing {
                 || self
                     .shore
                     .as_deref()
-                    .map(|s| s.contains("ranta"))
+                    .map(|s| s.contains("oma_ranta") || s.contains("rantaoik"))
                     .unwrap_or(false),
-            pipes_renovated_year: None,
+            pipes_renovated_year: self.pipes_renovated_year,
         }
     }
 }

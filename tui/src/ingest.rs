@@ -14,6 +14,111 @@ use crate::api::KontuClient;
 const UA: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const CARDS_PER_PAGE: usize = 24;
+const DETAIL_CONCURRENCY: usize = 5;
+
+/// Strip HTML tags and decode the few entities Oikotie uses, collapsing whitespace.
+fn strip_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&euro;", "€")
+        .replace("&auml;", "ä")
+        .replace("&ouml;", "ö")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Parse an Oikotie listing detail page into `{details:{label:value}, fullDescription}`.
+/// The structured info-table (Kunto, Rannan omistus, Lämmitys, …) is the reliable
+/// signal; the free-text paragraphs add fibre/neighbour hints the card lacks. Each
+/// value is scoped to before the next title so a multi-line field (e.g. the
+/// renovations list, whose `dd` carries a modifier class) can't swallow the next.
+fn parse_detail(html: &str) -> Value {
+    let mut details = serde_json::Map::new();
+    const TITLE: &str = "info-table__title\">";
+    let mut pos = 0;
+    while let Some(t) = html[pos..].find(TITLE) {
+        let kstart = pos + t + TITLE.len();
+        let kend = match html[kstart..].find("</dt>") {
+            Some(e) => kstart + e,
+            None => break,
+        };
+        let key = strip_html(&html[kstart..kend]);
+        let next_title = html[kend..].find(TITLE).map(|x| kend + x).unwrap_or(html.len());
+        let scope = &html[kend..next_title];
+        let val = scope.find("info-table__value").and_then(|vc| {
+            let after_class = vc + "info-table__value".len();
+            let gt = scope[after_class..].find('>')? + after_class + 1;
+            let end = scope[gt..].find("</dd>")? + gt;
+            Some(strip_html(&scope[gt..end]))
+        });
+        if let Some(val) = val {
+            if !key.is_empty() && !val.is_empty() {
+                details.entry(key).or_insert(Value::String(val));
+            }
+        }
+        pos = kend + "</dt>".len();
+    }
+    let mut desc = String::new();
+    let mut p = 0;
+    while let Some(t) = html[p..].find("<p class=\"paragraph") {
+        let tag = p + t;
+        if let Some(gt) = html[tag..].find('>') {
+            let cstart = tag + gt + 1;
+            if let Some(end) = html[cstart..].find("</p>") {
+                let para = strip_html(&html[cstart..cstart + end]);
+                if !para.is_empty() {
+                    desc.push_str(&para);
+                    desc.push(' ');
+                }
+                p = cstart + end;
+                continue;
+            }
+        }
+        p = tag + 1;
+    }
+    json!({ "details": details, "fullDescription": desc.trim() })
+}
+
+async fn fetch_detail(http: &Client, url: &str) -> Option<Value> {
+    let html = http.get(url).send().await.ok()?.text().await.ok()?;
+    Some(parse_detail(&html))
+}
+
+/// Fetch each card's detail page (bounded concurrency) and fold the structured
+/// info-table + full description back into the card for the Worker to normalize.
+async fn enrich_cards(http: &Client, cards: &mut [Value]) {
+    use futures::stream::{self, StreamExt};
+    let jobs: Vec<(usize, String)> = cards
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| c.get("url").and_then(Value::as_str).map(|u| (i, u.to_string())))
+        .collect();
+    let enriched: Vec<(usize, Option<Value>)> = stream::iter(jobs)
+        .map(|(i, url)| {
+            let http = http.clone();
+            async move { (i, fetch_detail(&http, &url).await) }
+        })
+        .buffer_unordered(DETAIL_CONCURRENCY)
+        .collect()
+        .await;
+    for (i, d) in enriched {
+        if let (Some(d), Some(obj)) = (d, cards[i].as_object_mut()) {
+            obj.insert("details".into(), d.get("details").cloned().unwrap_or(Value::Null));
+            obj.insert("fullDescription".into(), d.get("fullDescription").cloned().unwrap_or(Value::Null));
+        }
+    }
+}
 
 struct Session {
     token: String,
@@ -199,6 +304,7 @@ pub async fn pull_oikotie(
     shore: bool,
     price_max: Option<i64>,
     limit: usize,
+    deep: bool,
 ) -> Result<Value> {
     let http = Client::builder().user_agent(UA).gzip(true).build()?;
     let session = handshake(&http).await?;
@@ -207,9 +313,12 @@ pub async fn pull_oikotie(
         None => None,
     };
     let codes = building_type_codes(property_types);
-    let cards = fetch_cards(&http, &session, loc, &codes, shore, price_max, limit).await?;
+    let mut cards = fetch_cards(&http, &session, loc, &codes, shore, price_max, limit).await?;
     if cards.is_empty() {
         return Ok(json!({ "received": 0, "inserted": 0, "updated": 0, "skipped": 0 }));
+    }
+    if deep {
+        enrich_cards(&http, &mut cards).await;
     }
     client.import_oikotie(&cards).await
 }

@@ -36,6 +36,9 @@ export interface NormalizedListing {
 
   year_built: number | null;
   occupancy_year: number | null;
+  roof_year: number | null;
+  pipes_renovated_year: number | null;
+  water_body: string | null;
   condition_class: string | null;
   inspection_status: string | null;
   frame_material: string | null;
@@ -437,6 +440,9 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     floors: toNumber(firstString(get(c, "buildingData.floorCount"), c["floor"])),
     year_built: toInt(firstString(get(c, "buildingData.year"), c["buildYear"], c["yearOfBuilding"], get(c, "data.buildYear"))),
     occupancy_year: toInt(c["occupancyYear"]),
+    roof_year: null,
+    pipes_renovated_year: null,
+    water_body: null,
     condition_class: firstString(c["condition"], c["conditionClass"]),
     inspection_status: firstString(c["inspectionStatus"]),
     frame_material: firstString(c["frameMaterial"]),
@@ -463,7 +469,82 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     status,
     raw_json: safeStringify(card),
   };
+  applyOikotieDetail(row, c);
   return row;
+}
+
+/** Normalize a kuntoluokka label to a canonical class (Kunto: Hyvä → "hyvä"). */
+export function normalizeConditionClass(raw: unknown): string | null {
+  const s = asciiFold(raw);
+  if (s === "") return null;
+  if (/erinomai/.test(s)) return "erinomainen";
+  if (/hyva/.test(s)) return "hyvä";
+  if (/tyydyttav/.test(s)) return "tyydyttävä";
+  if (/valttav/.test(s)) return "välttävä";
+  if (/huono/.test(s)) return "huono";
+  if (/uudis/.test(s)) return "uudiskohde";
+  return s;
+}
+
+/** Normalize the Oikotie water-body label ("Rannan (vesistön) tyyppi"). */
+export function normalizeWaterBody(raw: unknown): string | null {
+  const s = asciiFold(raw);
+  if (s === "") return null;
+  if (/jarvi/.test(s)) return "jarvi";
+  if (/joki/.test(s)) return "joki";
+  if (/meri/.test(s)) return "meri";
+  if (/lampi/.test(s)) return "lampi";
+  return s;
+}
+
+/** First 4-digit year in a string (e.g. a renovation note "Kattoremontti 2023"). */
+function firstYear(raw: unknown): number | null {
+  const m = typeof raw === "string" ? raw.match(/\b(19|20)\d{2}\b/) : null;
+  return m ? Number(m[0]) : null;
+}
+
+/** Latest year tied to a plumbing/sewer renovation in the "Tehdyt remontit" text. */
+function pipeRenovationYear(raw: unknown): number | null {
+  if (typeof raw !== "string") return null;
+  let best: number | null = null;
+  for (const m of raw.matchAll(/\b(19|20)\d{2}\b[^.,;]*?(viemär|putki|jätevesi|käyttövesi|lvi|vesijohto)/giu)) {
+    const y = Number(m[0].match(/\b(19|20)\d{2}\b/)?.[0]);
+    if (Number.isFinite(y) && (best === null || y > best)) best = y;
+  }
+  for (const m of raw.matchAll(/(viemär|putki|jätevesi|käyttövesi|lvi|vesijohto)[^.,;]*?\b((19|20)\d{2})\b/giu)) {
+    const y = Number(m[2]);
+    if (Number.isFinite(y) && (best === null || y > best)) best = y;
+  }
+  return best;
+}
+
+/**
+ * Fold the per-listing detail-page info-table (`c.details`) and full description
+ * (`c.fullDescription`) into the row — these are richer and more reliable than the
+ * search-card fields, so detail values win when present.
+ */
+function applyOikotieDetail(row: NormalizedListing, c: Record<string, unknown>): void {
+  const det = (c["details"] ?? null) as Record<string, unknown> | null;
+  const full = firstString(c["fullDescription"]);
+  if (full && full.length > (row.description?.length ?? 0)) row.description = full;
+  if (!det) return;
+  const dv = (label: string) => firstString(det[label]);
+  const set = <K extends keyof NormalizedListing>(k: K, v: NormalizedListing[K] | null) => {
+    if (v !== null && v !== undefined && v !== "") row[k] = v as NormalizedListing[K];
+  };
+  set("condition_class", normalizeConditionClass(dv("Kunto")));
+  set("shore", normalizeShore(dv("Rannan omistus")));
+  set("water_body", normalizeWaterBody(dv("Rannan (vesistön) tyyppi")));
+  set("heating_type", normalizeHeatingType([dv("Lisätietoja lämmityksestä"), dv("Lämmitys")].filter(Boolean).join(" ")));
+  set("plot_ownership", normalizePlotOwnership(dv("Tontin omistus")));
+  set("energy_class", normalizeEnergyClass(dv("Energialuokka")));
+  set("frame_material", dv("Rakennusmateriaali"));
+  set("roof_material", dv("Kattomateriaali"));
+  set("water_supply", dv("Kunnallistekniikka"));
+  set("year_built", toInt(dv("Rakennusvuosi")) ?? row.year_built);
+  set("roof_year", firstYear(dv("Kattoremontti")));
+  set("pipes_renovated_year", pipeRenovationYear(dv("Tehdyt remontit")) ?? pipeRenovationYear(full));
+  if (/oma ranta|rantasauna/i.test(full ?? "") && !row.shore) row.shore = "oma_ranta";
 }
 
 const FINNISH_COUNTRY = /^(suomi|finland|finnland)$/i;
@@ -602,6 +683,9 @@ export function normalizeEtuoviAnnouncement(announcement: unknown): NormalizedLi
     floors: toNumber(firstString(a["residentialFloorCount"], a["floor"], a["numberOfFloors"])),
     year_built: toInt(firstString(a["constructionFinishedYear"], a["constructionYear"], a["yearBuilt"])),
     occupancy_year: toInt(a["occupancyYear"]),
+    roof_year: null,
+    pipes_renovated_year: null,
+    water_body: null,
     condition_class: firstString(a["condition"], a["conditionClassType"]),
     inspection_status: firstString(a["inspectionStatus"]),
     frame_material: firstString(a["frameMaterial"]),

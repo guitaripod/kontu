@@ -70,10 +70,14 @@ then run the workflow. If a spec was agreed earlier, reuse it instead of re-aski
   `watch run [--no-pull] [--min-fit N] [--seed]` does one cycle: pull → match → diff against
   the baseline in `~/.config/kontu/seen.json` → alert on new. Needs a residential IP, so it
   runs on the user's machine, not the Worker.
-- `pull [municipality] [--type <t>…] [--shore] [--price-max N] [--limit N] [--portal oikotie|etuovi|both]`
+- `pull [municipality] [--type <t>…] [--shore] [--price-max N] [--limit N] [--portal …] [--shallow]`
   — ingest REAL listings from this machine's IP into the Worker (Oikotie + Etuovi by
   default). Omit the municipality for ALL of Finland (use filters). `--shore` = lakehouses
-  only. Idempotent (upserts).
+  only. Idempotent (upserts). By default each Oikotie listing's DETAIL page is fetched and
+  parsed for the real structured fields (kuntoluokka condition, shore ownership, water-body
+  lake-vs-river, heating, plot ownership, energy class, roof/pipe renovation years, full
+  description) — slower but far richer; `--shallow` skips it. `match --pull` and `watch`
+  always enrich.
 - `list [filters] [--sort C] [--desc] [--limit N] [--json]` — exact-parameter search.
   Filters: `--municipality --type <omakotitalo|paritalo|rivitalo|kerrostalo|mökki>
   --holding <kiinteisto|asunto_osake> --price-min --price-max --m2-min --rooms-min
@@ -100,11 +104,14 @@ then run the workflow. If a spec was agreed earlier, reuse it instead of re-aski
 ## Key JSON fields
 - listing (`list`/`show`): `id, address, municipality, postal_code, price_eur,
   price_per_m2, living_area_m2, plot_area_m2, room_count, room_layout, year_built,
-  property_type, holding_form, shore, heating_type, energy_class, plot_ownership,
-  days_on_market, status, url, description`, plus `fairness:{band,ratio,benchmark,
-  confidence}` (band: underpriced|below_market|fair|above_market|overpriced|unknown — vs
-  the MML area median; `unknown` for small municipalities with suppressed data).
-  `price_eur` is null = price-on-request.
+  property_type, holding_form, shore, water_body, condition_class, heating_type,
+  energy_class, plot_ownership, roof_year, pipes_renovated_year, days_on_market, status,
+  url, description`, plus `fairness:{band,ratio,benchmark,confidence}` (band:
+  underpriced|below_market|fair|above_market|overpriced|unknown — vs the MML area median;
+  `unknown` for small municipalities with suppressed data). `price_eur` null =
+  price-on-request. `water_body` (jarvi|joki|meri|lampi), `condition_class`, `roof_year`,
+  `pipes_renovated_year` and a full (non-teaser) `description` are populated only by a deep
+  pull; `shore` distinguishes a lake from a river via `water_body` in match scoring.
 - `cost`: `npv_cost, equivalent_monthly, one_time{down_payment, transfer_tax,
   lainhuuto, kaupanvahvistus, kiinnitys, inspection, moving}, total_loan_interest,
   terminal_equity, loan_principal` (+ `years[]` with `--schedule`).

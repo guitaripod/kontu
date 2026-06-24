@@ -363,6 +363,9 @@ pub struct PullArgs {
     /// Which portal(s): oikotie | etuovi | both
     #[arg(long, default_value = "both")]
     portal: String,
+    /// Skip per-listing detail enrichment (faster, but no shore-type/condition/heating)
+    #[arg(long)]
+    shallow: bool,
 }
 
 #[derive(Args, Debug)]
@@ -669,6 +672,7 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
                 a.shore,
                 a.price_max,
                 a.limit,
+                !a.shallow,
                 &scope,
             )
             .await?;
@@ -728,14 +732,15 @@ async fn pull_spec(client: &KontuClient, spec: &Spec, scan: usize) {
     let shore = matches!(spec.shore, Pref::Required | Pref::Plus);
     if spec.municipalities.is_empty() {
         let _ = pull_portals(
-            client, "both", None, &spec.property_types, shore, spec.price_max, scan, "your spec",
+            client, "both", None, &spec.property_types, shore, spec.price_max, scan, true,
+            "your spec",
         )
         .await;
     } else {
         for m in &spec.municipalities {
             let _ = pull_portals(
                 client, "both", Some(m.as_str()), &spec.property_types, shore, spec.price_max, scan,
-                m,
+                true, m,
             )
             .await;
         }
@@ -974,6 +979,7 @@ async fn pull_portals(
     shore: bool,
     price_max: Option<i64>,
     limit: usize,
+    deep: bool,
     scope: &str,
 ) -> anyhow::Result<serde_json::Value> {
     let keys = ["received", "inserted", "updated", "skipped"];
@@ -985,7 +991,7 @@ async fn pull_portals(
     };
     if portal != "etuovi" {
         eprintln!("pulling {scope} from oikotie…");
-        match crate::ingest::pull_oikotie(client, muni, types, shore, price_max, limit).await {
+        match crate::ingest::pull_oikotie(client, muni, types, shore, price_max, limit, deep).await {
             Ok(r) => accumulate(&r, &mut t),
             Err(e) => eprintln!("  oikotie: {e}"),
         }

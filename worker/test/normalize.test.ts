@@ -318,6 +318,45 @@ describe("isForeignListing", () => {
   });
 });
 
+describe("oikotie detail enrichment", () => {
+  it("maps the info-table detail fields onto the listing (detail wins over card)", () => {
+    const n = normalizeOikotieCard({
+      id: "x",
+      buildingData: { buildingType: 4 },
+      details: {
+        Kunto: "Hyvä",
+        "Rannan omistus": "Oma ranta",
+        "Rannan (vesistön) tyyppi": "Joki",
+        Lämmitys: "Sähkö",
+        "Lisätietoja lämmityksestä": "Maalämpö",
+        "Tontin omistus": "Oma",
+        Energialuokka: "C, 2018",
+        Rakennusvuosi: "1998",
+        Kattoremontti: "2021",
+        "Tehdyt remontit": "2019 Viemärit - jätevesijärjestelmä uusittu, 2015 Muu",
+      },
+      fullDescription: "Talviasuttava hirsitalo omalla rannalla, valokuitu asennettu.",
+    });
+    expect(n.condition_class).toBe("hyvä");
+    expect(n.shore).toBe("oma_ranta");
+    expect(n.water_body).toBe("joki");
+    expect(n.heating_type).toBe("maalampo");
+    expect(n.plot_ownership).toBe("oma");
+    expect(n.energy_class).toBe("C");
+    expect(n.year_built).toBe(1998);
+    expect(n.roof_year).toBe(2021);
+    expect(n.pipes_renovated_year).toBe(2019);
+    expect(n.description).toContain("valokuitu");
+  });
+
+  it("leaves fields untouched when no detail is present", () => {
+    const n = normalizeOikotieCard({ id: "y", buildingData: { buildingType: 4, year: 2000 } });
+    expect(n.water_body).toBeNull();
+    expect(n.roof_year).toBeNull();
+    expect(n.year_built).toBe(2000);
+  });
+});
+
 describe("contentHash", () => {
   it("is stable for identical normalized fields", () => {
     const a = normalizeOikotieCard({ id: 1, price: "100000", city: "Kuopio", size: "80", rooms: "3" });

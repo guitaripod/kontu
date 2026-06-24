@@ -70,7 +70,15 @@ fn shore_signal(l: &Listing, desc: &str) -> f64 {
     } else {
         0.0
     };
-    structured.max(textual).max(0.0)
+    let base = structured.max(textual).max(0.0);
+    // The buyer wants a lake; a river (joki) shore is the same ownership but not it.
+    let lake_factor = match l.water_body.as_deref() {
+        Some(w) if w.contains("joki") => 0.5,
+        Some(w) if w.contains("lampi") => 0.8,
+        Some(w) if w.contains("meri") => 0.9,
+        _ => 1.0,
+    };
+    base * lake_factor
 }
 
 fn privacy_signal(l: &Listing, desc: &str) -> f64 {
@@ -145,6 +153,11 @@ fn infra_signal(l: &Listing, desc: &str) -> f64 {
 /// Explicit text wins; otherwise a non-leisure house is year-round by construction,
 /// while a mökki is inferred from central heating and plumbed (not carried) water.
 fn winter_signal(l: &Listing, desc: &str) -> f64 {
+    // A plot/fixer sold on the *potential* to build year-round, or for demolition,
+    // is not a move-in year-round home ("mahdollisuus rakentaa ympärivuotiseen…").
+    if has(desc, &["rakennuspaik", "rakennusoikeu", "rakentaa ympärivuoti", "mahdollisuus rakentaa", "purettav", "purkukunt"]) {
+        return 0.15;
+    }
     if has(desc, &["ei talviasut", "vain kesä", "kesäkäyt", "kesämök", "kesäasun", "kesahuvila", "ei lämmi"]) {
         return 0.1;
     }
@@ -189,7 +202,7 @@ fn winter_signal(l: &Listing, desc: &str) -> f64 {
 /// Explicit "good condition" / "needs renovation" text wins; otherwise build year
 /// drives it (the ~1960–85 valesokkeli/putki era is penalized; newer is better).
 fn condition_signal(l: &Listing, desc: &str) -> f64 {
-    if has(desc, &["remontin tarp", "remontoitav", "peruskorjauksen tarp", "peruskorjattava", "purkukunt", "purettav", "huonokuntoi", "korjausvel", "kosteusvaur", "homevaur", "asumiskelvot"]) {
+    if has(desc, &["remontin tarp", "remontoitav", "peruskorjauksen tarp", "peruskorjattava", "purkukunt", "purettav", "huonokuntoi", "korjausvel", "kosteusvaur", "homevaur", "asumiskelvot", "rakennuspaik", "rakennusoikeu"]) {
         return 0.2;
     }
     let mut base: f64 = if has(desc, &["muuttovalmi", "hyväkuntoi", "erinomaisessa kun", "erinomainen kun", "täysin remontoi", "remontoitu", "peruskorjattu", "uudisveroi", "hyvin pidet"]) {
@@ -522,6 +535,31 @@ mod tests {
         assert!(ws(&summer) <= 0.2, "kesämökki + kantovesi reads summer-only");
         assert!(ws(&year_round) >= 0.9, "talviasuttava reads year-round");
         assert!(ws(&house) >= 0.9, "a detached house is year-round by construction");
+    }
+
+    #[test]
+    fn river_shore_scores_below_lake_shore() {
+        let lake = Listing {
+            shore: Some("oma_ranta".into()),
+            water_body: None,
+            ..Default::default()
+        };
+        let river = Listing {
+            shore: Some("oma_ranta".into()),
+            water_body: Some("joki".into()),
+            ..Default::default()
+        };
+        assert!(shore_signal(&river, "") < shore_signal(&lake, ""));
+        // an unknown water body must NOT be penalized
+        assert_eq!(shore_signal(&lake, ""), 1.0);
+    }
+
+    #[test]
+    fn buildable_plot_is_not_year_round_or_good_condition() {
+        let plot = Listing { property_type: Some("omakotitalo".into()), ..Default::default() };
+        let desc = "mahdollisuus rakentaa ympärivuotiseen käyttöön, rakennusoikeutta jäljellä";
+        assert!(winter_signal(&plot, desc) < 0.3, "build-for-year-round must not read year-round");
+        assert!(condition_signal(&plot, desc) <= 0.3, "a buildable plot is not good condition");
     }
 
     #[test]
