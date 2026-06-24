@@ -238,8 +238,11 @@ impl SpecSetArgs {
 
 #[derive(Args, Debug)]
 pub struct PullArgs {
-    /// Municipality to pull, e.g. Outokumpu
-    municipality: String,
+    /// Municipality, e.g. Outokumpu. Omit to pull from ALL of Finland (use filters!)
+    municipality: Option<String>,
+    /// Property type to include (repeatable): omakotitalo, mökki, rivitalo, paritalo, kerrostalo, erillistalo
+    #[arg(long = "type")]
+    property_types: Vec<String>,
     /// Only listings at or below this price (€)
     #[arg(long)]
     price_max: Option<i64>,
@@ -525,8 +528,16 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
             print!("{}", include_str!("../../AGENTS.md"));
         }
         Command::Pull(a) => {
-            eprintln!("pulling {} from oikotie (your IP)…", a.municipality);
-            let r = crate::ingest::pull_oikotie(client, &a.municipality, a.price_max, a.limit).await?;
+            let scope = a.municipality.clone().unwrap_or_else(|| "all of Finland".into());
+            eprintln!("pulling {scope} from oikotie (your IP)…");
+            let r = crate::ingest::pull_oikotie(
+                client,
+                a.municipality.as_deref(),
+                &a.property_types,
+                a.price_max,
+                a.limit,
+            )
+            .await?;
             if json {
                 emit(&r)?;
             } else {

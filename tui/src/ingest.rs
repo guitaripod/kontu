@@ -31,13 +31,36 @@ fn meta(html: &str, name: &str) -> Option<String> {
     Some(rest[cidx..cidx + end].to_string())
 }
 
-async fn handshake(http: &Client, municipality: &str) -> Result<Session> {
-    let url = format!(
-        "https://asunnot.oikotie.fi/myytavat-asunnot/{}",
-        municipality.to_lowercase()
-    );
+/// Oikotie buildingType[] bitmask codes (1=kerrostalo, 2=rivitalo, 4=omakotitalo
+/// confirmed live; the rest are best-effort). Unmapped types contribute no code,
+/// so an empty result means "all types".
+fn building_type_codes(types: &[String]) -> Vec<i64> {
+    types
+        .iter()
+        .filter_map(|t| {
+            let t = t.to_lowercase();
+            if t.contains("omakoti") {
+                Some(4)
+            } else if t.contains("rivi") {
+                Some(2)
+            } else if t.contains("pari") {
+                Some(8)
+            } else if t.contains("kerros") {
+                Some(1)
+            } else if t.contains("erillis") {
+                Some(32)
+            } else if t.contains("mökki") || t.contains("mokki") || t.contains("loma") {
+                Some(256)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+async fn handshake(http: &Client) -> Result<Session> {
     let html = http
-        .get(&url)
+        .get("https://asunnot.oikotie.fi/myytavat-asunnot")
         .send()
         .await
         .context("fetching oikotie search page")?
@@ -104,21 +127,26 @@ async fn resolve_location(http: &Client, s: &Session, query: &str) -> Result<(i6
 async fn fetch_cards(
     http: &Client,
     s: &Session,
-    loc: (i64, i64, String),
+    loc: Option<(i64, i64, String)>,
+    building_types: &[i64],
     price_max: Option<i64>,
     limit: usize,
 ) -> Result<Vec<Value>> {
-    let locations = format!("[[{},{},\"{}\"]]", loc.0, loc.1, loc.2);
     let mut cards: Vec<Value> = Vec::new();
     let mut offset = 0usize;
     loop {
         let mut q: Vec<(String, String)> = vec![
             ("cardType".into(), "100".into()),
-            ("locations".into(), locations.clone()),
             ("limit".into(), CARDS_PER_PAGE.to_string()),
             ("offset".into(), offset.to_string()),
             ("sortBy".into(), "published_desc".into()),
         ];
+        if let Some((id, t, name)) = &loc {
+            q.push(("locations".into(), format!("[[{},{},\"{}\"]]", id, t, name)));
+        }
+        for bt in building_types {
+            q.push(("buildingType[]".into(), bt.to_string()));
+        }
         if let Some(pm) = price_max {
             q.push(("price[max]".into(), pm.to_string()));
         }
@@ -155,14 +183,19 @@ async fn fetch_cards(
 /// IP and import them into the Worker. Returns the import summary.
 pub async fn pull_oikotie(
     client: &KontuClient,
-    municipality: &str,
+    municipality: Option<&str>,
+    property_types: &[String],
     price_max: Option<i64>,
     limit: usize,
 ) -> Result<Value> {
     let http = Client::builder().user_agent(UA).gzip(true).build()?;
-    let session = handshake(&http, municipality).await?;
-    let loc = resolve_location(&http, &session, municipality).await?;
-    let cards = fetch_cards(&http, &session, loc, price_max, limit).await?;
+    let session = handshake(&http).await?;
+    let loc = match municipality {
+        Some(m) => Some(resolve_location(&http, &session, m).await?),
+        None => None,
+    };
+    let codes = building_type_codes(property_types);
+    let cards = fetch_cards(&http, &session, loc, &codes, price_max, limit).await?;
     if cards.is_empty() {
         return Ok(serde_json::json!({ "received": 0, "inserted": 0, "updated": 0, "skipped": 0 }));
     }
