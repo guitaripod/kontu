@@ -207,6 +207,13 @@ fn condition_signal(l: &Listing, desc: &str) -> f64 {
     if l.condition_class.as_deref().map(|c| c.contains("hyvä") || c.contains("erinomai")).unwrap_or(false) {
         base = base.max(0.85);
     }
+    // The buyer wants kuntoluokka hyvä or better, so "tyydyttävä" (satisfactory)
+    // and below are kept under the Required threshold and thus hard-dropped.
+    if l.condition_class.as_deref().map(|c| c.contains("tyydyttäv")).unwrap_or(false)
+        || has(desc, &["tyydyttäväss", "tyydyttävä kun"])
+    {
+        base = base.min(0.45);
+    }
     if l.condition_class.as_deref().map(|c| c.contains("huono") || c.contains("välttäv")).unwrap_or(false) {
         base = base.min(0.35);
     }
