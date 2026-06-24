@@ -109,6 +109,10 @@ multiple agents; everything else is deterministic and lives in the commands abov
 - `compare <id> <id> ... [--json]` — side-by-side price / €m² / modelled NPV / risk.
 - `score <id> <0..100> [--deal-breaker]` and `note <id> "<text>"` — personal layer.
 - `open <id>` — open the listing's real source URL in the browser.
+- `card <id> [--lang fi|en] [--out <path>]` — render a shareable PNG ownership
+  one-pager (cover photo + price, all-in acquisition cost, monthly running cost,
+  kiinteistövero, condition, what recurring obligations it avoids, modelled 20-yr
+  value). Self-contained (no external tools). Defaults to `~/kontu-<muni>-<id>.png`.
 - `defaults [--json]` — 2026 cost-model seed values (tax rates, Euribor, kiinteistövero).
 - `market <municipality> [--json]` — area price statistics (price-fairness backbone).
 - `sync` — ask the Worker to run its (IP-limited) crawl tick; mostly informational.

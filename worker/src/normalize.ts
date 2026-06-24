@@ -39,6 +39,7 @@ export interface NormalizedListing {
   roof_year: number | null;
   pipes_renovated_year: number | null;
   water_body: string | null;
+  kiinteistovero_eur_yr: number | null;
   condition_class: string | null;
   inspection_status: string | null;
   frame_material: string | null;
@@ -443,6 +444,7 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     roof_year: null,
     pipes_renovated_year: null,
     water_body: null,
+    kiinteistovero_eur_yr: null,
     condition_class: firstString(c["condition"], c["conditionClass"]),
     inspection_status: firstString(c["inspectionStatus"]),
     frame_material: firstString(c["frameMaterial"]),
@@ -495,6 +497,13 @@ export function normalizeWaterBody(raw: unknown): string | null {
   if (/meri/.test(s)) return "meri";
   if (/lampi/.test(s)) return "lampi";
   return null;
+}
+
+/** Euro amount from an Oikotie figure like "317,01 € / v" or "1 234 € / v". */
+function euroAmount(raw: unknown): number | null {
+  if (typeof raw !== "string") return null;
+  const m = raw.replace(/\s/g, "").replace(",", ".").match(/-?\d+(\.\d+)?/);
+  return m ? Math.round(Number(m[0])) : null;
 }
 
 /** First 4-digit year in a string (e.g. a renovation note "Kattoremontti 2023"). */
@@ -563,6 +572,7 @@ function applyOikotieDetail(row: NormalizedListing, c: Record<string, unknown>):
     if (/viemär/i.test(muni)) set("sewer_system", "kunnallinen viemäri");
   }
   set("year_built", toInt(dv("Rakennusvuosi")) ?? row.year_built);
+  set("kiinteistovero_eur_yr", euroAmount(dv("Kiinteistövero")));
   set("roof_year", firstYear(dv("Kattoremontti")));
   set("pipes_renovated_year", pipeRenovationYear(dv("Tehdyt remontit")) ?? pipeRenovationYear(full));
   // Only the explicit "oma ranta" literal asserts owned shore; a rantasauna can sit
@@ -709,6 +719,7 @@ export function normalizeEtuoviAnnouncement(announcement: unknown): NormalizedLi
     roof_year: null,
     pipes_renovated_year: null,
     water_body: null,
+    kiinteistovero_eur_yr: null,
     condition_class: firstString(a["condition"], a["conditionClassType"]),
     inspection_status: firstString(a["inspectionStatus"]),
     frame_material: firstString(a["frameMaterial"]),

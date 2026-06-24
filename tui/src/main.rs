@@ -1,6 +1,7 @@
 mod action;
 mod api;
 mod app;
+mod card;
 mod cli;
 mod config;
 mod cost;

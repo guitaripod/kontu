@@ -108,6 +108,8 @@ pub enum Command {
     },
     /// Find and rank listings by fit to your saved spec (best first)
     Match(MatchArgs),
+    /// Render a shareable PNG ownership one-pager for a listing
+    Card(CardArgs),
     /// New-listing alerts: poll your spec and push fresh matches to Telegram
     Watch {
         #[command(subcommand)]
@@ -160,6 +162,18 @@ pub struct WatchInstallArgs {
     /// systemd OnCalendar expression (default: 2-hourly, 08:00–22:00)
     #[arg(long)]
     schedule: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct CardArgs {
+    /// Listing id
+    id: i64,
+    /// Card language: fi | en
+    #[arg(long, default_value = "fi")]
+    lang: String,
+    /// Output PNG path (default: ~/kontu-<municipality>-<id>.png)
+    #[arg(long)]
+    out: Option<std::path::PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -722,6 +736,12 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
             }
         }
         Command::Watch { action } => handle_watch(action, client, json).await?,
+        Command::Card(a) => {
+            let path =
+                crate::card::render_card(client, a.id, crate::card::Lang::parse(&a.lang), a.out)
+                    .await?;
+            ok(json, format!("wrote {}", path.display()));
+        }
     }
     Ok(())
 }

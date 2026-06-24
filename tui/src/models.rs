@@ -87,6 +87,9 @@ pub struct Listing {
     /// Water-body type for shore listings: jarvi (lake) | joki (river) | meri | lampi.
     #[serde(default)]
     pub water_body: Option<String>,
+    /// Actual annual property tax (kiinteistövero) from the listing detail page.
+    #[serde(default)]
+    pub kiinteistovero_eur_yr: Option<i64>,
     #[serde(default)]
     pub condition_class: Option<String>,
     #[serde(default)]
