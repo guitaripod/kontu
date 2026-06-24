@@ -71,6 +71,22 @@ pub fn recurring_lines(
     let g = m.general_inflation;
     let e = m.energy_inflation;
 
+    if p.is_apartment {
+        // The hoitovastike already bundles maintenance, water, waste, heating,
+        // building insurance and kiinteistövero, so the owner's recurring costs
+        // are the vastike plus own electricity, contents insurance and broadband.
+        let mut lines = vec![
+            RecurringLine { name: "vastike", annual0: p.vastike_eur_mo * 12.0, inflation: g },
+            RecurringLine { name: "insurance", annual0: p.insurance_eur_yr.unwrap_or(d.insurance_eur_yr), inflation: g },
+            RecurringLine { name: "broadband", annual0: d.broadband_eur_yr, inflation: g },
+            RecurringLine { name: "electricity", annual0: p.electricity_eur_yr.unwrap_or(d.electricity_eur_yr), inflation: e },
+        ];
+        if p.ground_rent_eur_yr > 0.0 {
+            lines.push(RecurringLine { name: "ground_rent", annual0: p.ground_rent_eur_yr, inflation: g });
+        }
+        return lines;
+    }
+
     let mut lines = vec![
         RecurringLine { name: "kiinteistovero", annual0: kiinteistovero, inflation: g },
         RecurringLine { name: "insurance", annual0: p.insurance_eur_yr.unwrap_or(d.insurance_eur_yr), inflation: g },

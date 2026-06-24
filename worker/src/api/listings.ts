@@ -30,11 +30,19 @@ import {
   updateSavedSearch,
   upsertListing,
   recordDiffEvents,
+  recordPhoto,
+  isPhotoSeen,
+  deletePhotosFrom,
   type ListingsFilter,
 } from "../db";
 import { crawlTick } from "../crawl";
 import { enrichBatch } from "../geo";
-import { normalizeOikotieCard, normalizeEtuoviAnnouncement } from "../normalize";
+import {
+  normalizeOikotieCard,
+  normalizeEtuoviAnnouncement,
+  oikotiePhotoUrls,
+  etuoviPhotoUrls,
+} from "../normalize";
 import { computeFairness, loadMedians, marketIsStale, refreshMarketStats } from "../fairprice";
 
 export const api = new Hono<{ Bindings: Env }>();
@@ -150,6 +158,7 @@ api.post("/import", async (c) => {
       await recordDiffEvents(c.env.DB, res);
       if (res.inserted) inserted++;
       else updated++;
+      await recordCoverPhoto(c.env.DB, res.listingId, isEtuovi ? etuoviPhotoUrls(item) : oikotiePhotoUrls(item));
     } catch {
       skipped++;
     }
@@ -169,6 +178,38 @@ api.post("/import", async (c) => {
     skipped,
   });
 });
+
+/**
+ * Record a listing's cover photo(s) WITHOUT downloading them: store the source
+ * URL under a URL-derived R2 key. `/api/photos/:key` fetches the bytes lazily on
+ * first view (read-through cache), so imports stay fast and only viewed images
+ * are ever pulled. Best-effort: a photo failure never breaks an import.
+ */
+async function recordCoverPhoto(db: D1Database, listingId: number, urls: string[]): Promise<void> {
+  if (urls.length === 0) return;
+  let position = 0;
+  for (const url of urls) {
+    position++;
+    try {
+      // Reuse a key the crawler already cached for this URL; else derive one from
+      // the URL so the read-through cache can resolve it lazily on first view.
+      const key = (await isPhotoSeen(db, url)) ?? `photos/${await sha256Hex(url)}`;
+      await recordPhoto(db, listingId, position, key, url, null);
+    } catch {
+      /* best-effort: a photo failure must never break an import */
+    }
+  }
+  try {
+    await deletePhotosFrom(db, listingId, urls.length);
+  } catch {
+    /* best-effort */
+  }
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 api.get("/cost-defaults", async (c) => {
   const defaults = await getCostDefaults(c.env.DB);

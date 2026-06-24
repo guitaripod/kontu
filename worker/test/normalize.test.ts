@@ -2,11 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   asciiFold,
   contentHash,
+  etuoviPhotoUrls,
   extractRiskStructures,
   fingerprint,
   normalizeEtuoviAnnouncement,
   normalizeOikotieCard,
   normalizePropertyType,
+  oikotiePhotoUrls,
   toNumber,
 } from "../src/normalize";
 
@@ -260,6 +262,41 @@ describe("normalizeEtuoviAnnouncement", () => {
     expect(() => normalizeEtuoviAnnouncement(null)).not.toThrow();
     expect(() => normalizeEtuoviAnnouncement({})).not.toThrow();
     expect(() => normalizeEtuoviAnnouncement([])).not.toThrow();
+  });
+});
+
+describe("oikotie buildingType bitmask", () => {
+  const typeOf = (code: number) =>
+    normalizeOikotieCard({ id: "x", buildingData: { buildingType: code } }).property_type;
+  it("maps the live-verified codes (post-canonicalization)", () => {
+    expect(typeOf(1)).toBe("kerrostalo");
+    expect(typeOf(2)).toBe("rivitalo");
+    expect(typeOf(4)).toBe("omakotitalo");
+    // 8 was wrongly 'luhtitalo' before the fix; 64 was unmapped → description fallback
+    expect(typeOf(8)).toBe("mokki");
+    expect(typeOf(64)).toBe("paritalo");
+    // 256 was wrongly 'mökki' before the fix
+    expect(typeOf(256)).toBe("luhtitalo");
+    // erillistalo canonicalizes to omakotitalo for filtering
+    expect(typeOf(32)).toBe("omakotitalo");
+  });
+});
+
+describe("cover photo extraction", () => {
+  it("returns the Oikotie card cover (already absolute https)", () => {
+    const u = "https://cdn.asunnot.oikotie.fi/abc/623x464/x.jpg";
+    expect(oikotiePhotoUrls({ images: { wide: u } })).toEqual([u]);
+    expect(oikotiePhotoUrls({})).toEqual([]);
+  });
+  it("resolves the Etuovi protocol-relative URI with the size placeholder", () => {
+    const out = etuoviPhotoUrls({
+      mainImageUri: "//d3ls91xgksobn.cloudfront.net/{imageParameters}/etuovimedia/x/ORIGINAL.jpeg",
+    });
+    expect(out).toEqual([
+      "https://d3ls91xgksobn.cloudfront.net/1600x1066/etuovimedia/x/ORIGINAL.jpeg",
+    ]);
+    expect(etuoviPhotoUrls({ mainImageUri: "//x/y.jpg", mainImageHidden: true })).toEqual([]);
+    expect(etuoviPhotoUrls({})).toEqual([]);
   });
 });
 

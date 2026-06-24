@@ -178,7 +178,7 @@ export function buildListingsWhere(f: ListingsFilter): BuiltQuery {
   }
   if (f.property_type) {
     clauses.push("l.property_type = ?");
-    binds.push(f.property_type);
+    binds.push(asciiFold(f.property_type));
   }
   if (f.holding_form) {
     clauses.push("l.holding_form = ?");
@@ -701,6 +701,24 @@ export async function isPhotoSeen(db: D1Database, url: string): Promise<string |
     r2_key: string;
   }>();
   return row?.r2_key ?? null;
+}
+
+/** Drop photo rows past `fromPosition` (1-based) so a re-import that yields fewer
+ *  photos than a prior ingest doesn't leave stale higher-position rows behind. */
+export async function deletePhotosFrom(db: D1Database, listingId: number, fromPosition: number): Promise<void> {
+  await db
+    .prepare("DELETE FROM listing_photos WHERE listing_id = ? AND position > ?")
+    .bind(listingId, fromPosition)
+    .run();
+}
+
+/** The recorded source URL for a photo R2 key (drives the read-through cache). */
+export async function getPhotoSourceByKey(db: D1Database, r2Key: string): Promise<string | null> {
+  const row = await db
+    .prepare("SELECT source_url FROM listing_photos WHERE r2_key = ? LIMIT 1")
+    .bind(r2Key)
+    .first<{ source_url: string }>();
+  return row?.source_url ?? null;
 }
 
 export async function recordPhoto(

@@ -69,6 +69,10 @@ pub struct PropertyInputs {
     pub ground_rent_eur_yr: f64,
     /// Monthly housing-company charge (vastike), 0 for a pure kiinteistö.
     pub vastike_eur_mo: f64,
+    /// Housing-company flat (asunto-osake): the hoitovastike subsumes building
+    /// upkeep/water/waste/heating/insurance/kiinteistövero, so those owner-paid
+    /// lines are replaced by `vastike` rather than added on top.
+    pub is_apartment: bool,
     /// Explicit overrides; when `None` a default is derived.
     pub kiinteistovero_eur_yr: Option<f64>,
     pub insurance_eur_yr: Option<f64>,

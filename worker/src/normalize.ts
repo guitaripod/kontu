@@ -343,25 +343,28 @@ export function fingerprintFor(row: NormalizedListing): string {
  * schema drifts and fields may be missing — every access is defensive.
  */
 /** Oikotie buildingData.buildingType integer code → Finnish type. Codes can drift. */
+/**
+ * Oikotie `buildingType` bitmask code → Finnish type. Codes verified live against
+ * asunnot.oikotie.fi/api/cards (buildingType[]=N returns cards whose buildingData
+ * carries the same N): 4=omakotitalo, 8=vapaa-ajan/mökki, 32=erillistalo,
+ * 64=paritalo. Matches tui ingest.rs `building_type_codes`.
+ */
 function oikotieBuildingType(code: unknown): string | undefined {
   switch (code) {
     case 1:
       return "kerrostalo";
     case 2:
       return "rivitalo";
-    case 3:
-      return "paritalo";
     case 4:
       return "omakotitalo";
-    case 5:
-      return "erillistalo";
-    case 6:
-      return "puutalo-osake";
     case 8:
-      return "luhtitalo";
-    case 128:
-    case 256:
       return "mökki";
+    case 32:
+      return "erillistalo";
+    case 64:
+      return "paritalo";
+    case 256:
+      return "luhtitalo";
     default:
       return undefined;
   }
@@ -452,6 +455,32 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     raw_json: safeStringify(card),
   };
   return row;
+}
+
+/** Cover-image URL(s) for an Oikotie card (already absolute https CDN links). */
+export function oikotiePhotoUrls(card: unknown): string[] {
+  const c = (card ?? {}) as Record<string, unknown>;
+  const u = firstString(
+    get(c, "images.wide"),
+    get(c, "imageUrl.wide"),
+    get(c, "images.url"),
+    c["image"],
+  );
+  return u && /^https?:\/\//i.test(u) ? [u] : [];
+}
+
+/**
+ * Cover-image URL for an Etuovi announcement. `mainImageUri` is protocol-relative
+ * with a `{imageParameters}` size placeholder; resolve both. Empty when hidden.
+ */
+export function etuoviPhotoUrls(announcement: unknown): string[] {
+  const a = (announcement ?? {}) as Record<string, unknown>;
+  if (a["mainImageHidden"] === true) return [];
+  const raw = firstString(a["mainImageUri"], a["imageUri"], a["coverImageUri"]);
+  if (!raw) return [];
+  const withScheme = raw.startsWith("//") ? `https:${raw}` : raw;
+  const resolved = withScheme.replace("{imageParameters}", "1600x1066");
+  return /^https?:\/\//i.test(resolved) ? [resolved] : [];
 }
 
 /** Parse the leading integer of an Etuovi `roomCount` (e.g. "3 huonetta" → 3). */

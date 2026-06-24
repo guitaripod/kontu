@@ -1,4 +1,5 @@
 use super::*;
+use super::recurring::recurring_lines;
 
 fn approx(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol
@@ -33,6 +34,7 @@ fn sample_property() -> PropertyInputs {
         private_road: false,
         ground_rent_eur_yr: 0.0,
         vastike_eur_mo: 0.0,
+        is_apartment: false,
         kiinteistovero_eur_yr: None,
         insurance_eur_yr: None,
         electricity_eur_yr: None,
@@ -253,6 +255,21 @@ fn leisure_kiinteistovero_exceeds_permanent() {
     let n_perm = project(&p, &perm, &model, &d).npv_cost;
     let n_leisure = project(&p, &leisure, &model, &d).npv_cost;
     assert!(n_leisure > n_perm, "leisure NPV {n_leisure} should exceed permanent {n_perm}");
+}
+
+#[test]
+fn apartment_vastike_replaces_owner_upkeep_lines_no_double_count() {
+    let d = CostDefaults::default();
+    let m = sample_model();
+    let mut flat = sample_property();
+    flat.is_apartment = true;
+    flat.vastike_eur_mo = 300.0;
+    let lines = recurring_lines(&flat, &m, &d, 140_000.0, 900.0);
+    let names: Vec<&str> = lines.iter().map(|l| l.name).collect();
+    assert!(names.contains(&"vastike"), "apartment must charge vastike");
+    for subsumed in ["maintenance_reserve", "kiinteistovero", "water", "waste", "heating"] {
+        assert!(!names.contains(&subsumed), "hoitovastike subsumes {subsumed}; must not be added on top");
+    }
 }
 
 #[test]

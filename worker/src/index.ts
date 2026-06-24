@@ -3,6 +3,7 @@ import { api } from "./api/listings";
 import { crawlTick } from "./crawl";
 import { enrichBatch } from "./geo";
 import { marketIsStale, refreshMarketStats } from "./fairprice";
+import { getPhotoSourceByKey } from "./db";
 
 export interface Env {
   DB: D1Database;
@@ -38,7 +39,8 @@ app.use("/api/*", async (c, next) => {
 
 app.get("/api/photos/:key{.+}", async (c) => {
   const key = c.req.param("key");
-  const object = await c.env.PHOTOS.get(key);
+  let object = await c.env.PHOTOS.get(key);
+  if (!object) object = await readThroughPhoto(c.env, key);
   if (!object) return c.json({ error: "not found" }, 404);
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -46,6 +48,51 @@ app.get("/api/photos/:key{.+}", async (c) => {
   headers.set("Cache-Control", "public, max-age=31536000, immutable");
   return new Response(object.body, { headers });
 });
+
+/**
+ * Lazily populate R2 on a cache miss: cover photos are recorded at import time as
+ * a URL-derived key + source URL only (no download). On first view we fetch the
+ * source, store it, and serve it — so imports stay fast and only viewed images
+ * are ever pulled. Returns the stored object, or null if it can't be fetched.
+ */
+const MAX_PHOTO_BYTES = 8_000_000;
+
+/** Reject non-https and host shapes that could reach internal/metadata endpoints
+ *  (literal IPs, localhost, *.internal/*.local) — legit photo CDNs use hostnames. */
+function isUnsafePhotoUrl(src: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(src);
+  } catch {
+    return true;
+  }
+  if (u.protocol !== "https:") return true;
+  const h = u.hostname.toLowerCase();
+  return (
+    h === "localhost" ||
+    h.endsWith(".internal") ||
+    h.endsWith(".local") ||
+    h.includes(":") ||
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(h)
+  );
+}
+
+async function readThroughPhoto(env: Env, key: string): Promise<R2ObjectBody | null> {
+  const src = await getPhotoSourceByKey(env.DB, key);
+  if (!src || isUnsafePhotoUrl(src)) return null;
+  try {
+    const res = await fetch(src);
+    if (!res.ok) return null;
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.startsWith("image/")) return null;
+    const bytes = await res.arrayBuffer();
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_PHOTO_BYTES) return null;
+    await env.PHOTOS.put(key, bytes, { httpMetadata: { contentType } });
+    return await env.PHOTOS.get(key);
+  } catch {
+    return null;
+  }
+}
 
 app.route("/api", api);
 

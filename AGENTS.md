@@ -58,6 +58,13 @@ then run the workflow. If a spec was agreed earlier, reuse it instead of re-aski
 - `match [--pull] [--limit N] [--scan N]` — rank listings by fit to the spec, best first
   (`score` 0–100; TCO-dominant + shore/privacy/ev/fiber/infra signals + risk; `reasons[]`
   explains each). `--pull` refreshes listings for the spec from your IP first.
+- `watch [run|config|test|install|status]` — push new spec-matching listings to Telegram.
+  Setup: `watch config --token <BotFather token>` → message the bot once →
+  `watch config` (auto-detects the chat id) → `watch test` → `watch run --seed` (baseline,
+  no alerts) → `watch install` (systemd-user timer; runs `watch run` on a schedule).
+  `watch run [--no-pull] [--min-fit N] [--seed]` does one cycle: pull → match → diff against
+  the baseline in `~/.config/kontu/seen.json` → alert on new. Needs a residential IP, so it
+  runs on the user's machine, not the Worker.
 - `pull [municipality] [--type <t>…] [--shore] [--price-max N] [--limit N] [--portal oikotie|etuovi|both]`
   — ingest REAL listings from this machine's IP into the Worker (Oikotie + Etuovi by
   default). Omit the municipality for ALL of Finland (use filters). `--shore` = lakehouses
@@ -69,7 +76,7 @@ then run the workflow. If a spec was agreed earlier, reuse it instead of re-aski
   --max-dom --exclude <keyword> --price-dropped --text`.
   Sort C: `price|ppm2|size|year|dom|risk|score`.
 - `show <id> [--json]` — full detail: every listing field + risk + cost summary +
-  price/status history + your note/score/tags.
+  price/status history + your note/score/tags + cover-photo count (the TUI renders it).
 - `cost <id> [overrides] [--schedule] [--json]` — local total-cost-of-ownership model
   (real-euro NPV over a horizon; principal is not a cost). Overrides: `--price --ltv
   --euribor --margin --term --horizon --discount --heating --repayment`. `--schedule`

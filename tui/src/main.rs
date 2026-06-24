@@ -13,9 +13,11 @@ mod models;
 mod render_smoke;
 mod risk;
 mod spec;
+mod telegram;
 mod theme;
 mod tui;
 mod ui;
+mod watch;
 
 use anyhow::Result;
 use clap::Parser;

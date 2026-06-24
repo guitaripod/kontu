@@ -8,11 +8,13 @@ use serde_json::json;
 
 use crate::api::KontuClient;
 use crate::app::CostState;
+use crate::config::Config;
 use crate::cost::{HeatingType, Projection, RepaymentType};
 use crate::format::{area_opt, int_opt, money, money_opt, num_opt, ppm2_opt, str_opt};
-use crate::models::{FilterState, Listing, ListingDetail, SortColumn};
+use crate::models::{FilterState, Listing, ListingDetail, ListingsPage, SortColumn};
 use crate::risk::{self, RiskAssessment};
 use crate::spec::{Pref, Spec};
+use crate::{telegram, watch};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -106,6 +108,58 @@ pub enum Command {
     },
     /// Find and rank listings by fit to your saved spec (best first)
     Match(MatchArgs),
+    /// New-listing alerts: poll your spec and push fresh matches to Telegram
+    Watch {
+        #[command(subcommand)]
+        action: Option<WatchAction>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WatchAction {
+    /// Run one detection cycle now (pull + match + diff + notify) — the timer's job
+    Run(WatchRunArgs),
+    /// Set Telegram credentials (bot token from @BotFather; chat id auto-detected)
+    Config(WatchConfigArgs),
+    /// Send a test message to confirm Telegram delivery works
+    Test,
+    /// Install a systemd-user timer that runs `kontu watch run` on a schedule
+    Install(WatchInstallArgs),
+    /// Show watch status (credentials, baseline size, how to enable the timer)
+    Status,
+}
+
+#[derive(Args, Debug)]
+pub struct WatchRunArgs {
+    /// Skip the fresh pull and rank already-ingested listings
+    #[arg(long)]
+    no_pull: bool,
+    /// Only alert on matches scoring at least this fit (0–100)
+    #[arg(long, default_value_t = 55.0)]
+    min_fit: f64,
+    /// Listings scanned per area before ranking
+    #[arg(long, default_value_t = 800)]
+    scan: usize,
+    /// Mark all current matches as seen WITHOUT alerting (establish a baseline)
+    #[arg(long)]
+    seed: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct WatchConfigArgs {
+    /// Telegram bot token from @BotFather
+    #[arg(long)]
+    token: Option<String>,
+    /// Telegram chat id (omit to auto-detect from a message you sent the bot)
+    #[arg(long)]
+    chat_id: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct WatchInstallArgs {
+    /// systemd OnCalendar expression (default: 2-hourly, 08:00–22:00)
+    #[arg(long)]
+    schedule: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -305,6 +359,8 @@ pub struct ListArgs {
     #[arg(long)]
     m2_min: Option<f64>,
     #[arg(long)]
+    m2_max: Option<f64>,
+    #[arg(long)]
     rooms_min: Option<f64>,
     #[arg(long)]
     year_min: Option<i32>,
@@ -313,6 +369,9 @@ pub struct ListArgs {
     shore: Option<String>,
     #[arg(long)]
     heating: Option<String>,
+    /// Max energy class to allow (A best … G worst), e.g. C
+    #[arg(long = "energy-class-max")]
+    energy_class_max: Option<String>,
     /// Plot ownership: oma | vuokra
     #[arg(long)]
     plot: Option<String>,
@@ -346,12 +405,12 @@ impl ListArgs {
             price_min: self.price_min,
             price_max: self.price_max,
             m2_min: self.m2_min,
-            m2_max: None,
+            m2_max: self.m2_max,
             rooms_min: self.rooms_min,
             year_min: self.year_min,
             shore: self.shore,
             heating_type: self.heating,
-            energy_class_max: None,
+            energy_class_max: self.energy_class_max,
             plot_ownership: self.plot,
             max_days_on_market: self.max_dom,
             exclude_keywords: self.exclude,
@@ -393,6 +452,9 @@ pub struct CostArgs {
     /// Repayment: annuiteetti | tasalyhennys | kiintea
     #[arg(long)]
     repayment: Option<String>,
+    /// Monthly housing-company charge (hoito + rahoitusvastike), €/mo
+    #[arg(long)]
+    vastike: Option<f64>,
     /// Include the year-by-year schedule in the output
     #[arg(long)]
     schedule: bool,
@@ -428,6 +490,9 @@ impl CostArgs {
         if let Some(r) = &self.repayment {
             cs.repayment = parse_repayment(r);
         }
+        if let Some(v) = self.vastike {
+            cs.vastike = v;
+        }
     }
 }
 
@@ -435,7 +500,11 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
     match command {
         Command::List(a) => {
             let (filter, sort, desc, limit) = a.into_query();
-            let page = client.list_listings(&filter, sort, desc, limit, 0).await?;
+            let page = if matches!(sort, SortColumn::RiskScore) {
+                risk_sorted_page(client, &filter, desc, limit).await?
+            } else {
+                client.list_listings(&filter, sort, desc, limit, 0).await?
+            };
             if json {
                 emit(&page)?;
             } else {
@@ -610,41 +679,10 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
         Command::Match(a) => {
             let spec = Spec::load()?;
             if a.pull {
-                let shore = matches!(spec.shore, Pref::Required | Pref::Plus);
-                if spec.municipalities.is_empty() {
-                    let _ = pull_portals(
-                        client, "both", None, &spec.property_types, shore, spec.price_max, a.scan,
-                        "your spec",
-                    )
-                    .await;
-                } else {
-                    for m in &spec.municipalities {
-                        let _ = pull_portals(
-                            client, "both", Some(m.as_str()), &spec.property_types, shore,
-                            spec.price_max, a.scan, m,
-                        )
-                        .await;
-                    }
-                }
+                pull_spec(client, &spec, a.scan).await;
             }
             let defaults = client.cost_defaults().await.unwrap_or_default();
-            let mut filter = spec_to_filter(&spec);
-            let listings = if spec.municipalities.len() >= 2 {
-                let mut all = Vec::new();
-                for m in &spec.municipalities {
-                    filter.municipality = Some(m.clone());
-                    let page = client
-                        .list_listings(&filter, SortColumn::Price, false, a.scan as u32, 0)
-                        .await?;
-                    all.extend(page.listings);
-                }
-                all
-            } else {
-                client
-                    .list_listings(&filter, SortColumn::Price, false, a.scan as u32, 0)
-                    .await?
-                    .listings
-            };
+            let listings = fetch_spec_listings(client, &spec, a.scan).await?;
             let ranked = crate::matching::rank(&spec, listings, &defaults);
             let top: Vec<_> = ranked.into_iter().take(a.limit).collect();
             if json {
@@ -653,8 +691,212 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
                 print_matches(&top);
             }
         }
+        Command::Watch { action } => handle_watch(action, client, json).await?,
     }
     Ok(())
+}
+
+/// Pull fresh listings for the spec from this machine's IP — per-municipality when
+/// the spec names areas (so each gets a real server-side filter), else nationwide.
+async fn pull_spec(client: &KontuClient, spec: &Spec, scan: usize) {
+    let shore = matches!(spec.shore, Pref::Required | Pref::Plus);
+    if spec.municipalities.is_empty() {
+        let _ = pull_portals(
+            client, "both", None, &spec.property_types, shore, spec.price_max, scan, "your spec",
+        )
+        .await;
+    } else {
+        for m in &spec.municipalities {
+            let _ = pull_portals(
+                client, "both", Some(m.as_str()), &spec.property_types, shore, spec.price_max, scan,
+                m,
+            )
+            .await;
+        }
+    }
+}
+
+async fn handle_watch(action: Option<WatchAction>, client: &KontuClient, json: bool) -> Result<()> {
+    match action.unwrap_or(WatchAction::Status) {
+        WatchAction::Config(a) => watch_config(a, json).await,
+        WatchAction::Test => watch_test(json).await,
+        WatchAction::Install(a) => {
+            let cfg = Config::load()?;
+            let configured = !cfg.telegram_token.is_empty() && !cfg.telegram_chat_id.is_empty();
+            let summary = watch::install_timer(a.schedule, configured)?;
+            ok(json, summary);
+            Ok(())
+        }
+        WatchAction::Status => {
+            watch_status(json)?;
+            Ok(())
+        }
+        WatchAction::Run(a) => watch_run(a, client, json).await,
+    }
+}
+
+/// Persist Telegram credentials; auto-detect the chat id from a message the user
+/// sent the bot when only the token is given.
+async fn watch_config(a: WatchConfigArgs, json: bool) -> Result<()> {
+    let mut cfg = Config::load_raw()?;
+    if let Some(t) = a.token {
+        cfg.telegram_token = t.trim().to_string();
+    }
+    match a.chat_id {
+        Some(c) => cfg.telegram_chat_id = c.trim().to_string(),
+        None if cfg.telegram_chat_id.is_empty() && !cfg.telegram_token.is_empty() => {
+            match telegram::detect_chat_id(&cfg.telegram_token).await {
+                Ok(id) => cfg.telegram_chat_id = id,
+                Err(e) => eprintln!("kontu: chat id not detected ({e})"),
+            }
+        }
+        None => {}
+    }
+    cfg.save()?;
+    let configured = !cfg.telegram_token.is_empty() && !cfg.telegram_chat_id.is_empty();
+    if json {
+        emit(&json!({
+            "telegram_token_set": !cfg.telegram_token.is_empty(),
+            "telegram_chat_id": cfg.telegram_chat_id,
+            "configured": configured,
+        }))
+    } else {
+        println!(
+            "telegram token: {}\ntelegram chat id: {}\n{}",
+            if cfg.telegram_token.is_empty() { "unset" } else { "set" },
+            if cfg.telegram_chat_id.is_empty() { "unset" } else { &cfg.telegram_chat_id },
+            if configured {
+                "ready — `kontu watch test` to confirm, then `kontu watch install`"
+            } else {
+                "message your bot once, then run `kontu watch config` to auto-detect the chat id"
+            }
+        );
+        Ok(())
+    }
+}
+
+async fn watch_test(json: bool) -> Result<()> {
+    let cfg = Config::load()?;
+    require_telegram(&cfg)?;
+    telegram::send_message(
+        &cfg.telegram_token,
+        &cfg.telegram_chat_id,
+        "✅ <b>kontu</b> watch is connected. New matches to your spec will land here.",
+    )
+    .await?;
+    ok(json, "sent a test message to Telegram".into());
+    Ok(())
+}
+
+fn watch_status(json: bool) -> Result<()> {
+    let cfg = Config::load()?;
+    let spec = Spec::load()?;
+    let seen = watch::load_seen().unwrap_or_default();
+    let configured = !cfg.telegram_token.is_empty() && !cfg.telegram_chat_id.is_empty();
+    if json {
+        emit(&json!({
+            "configured": configured,
+            "telegram_chat_id": cfg.telegram_chat_id,
+            "baseline_seen": seen.len(),
+            "spec_is_empty": spec.is_empty(),
+        }))
+    } else {
+        println!(
+            "telegram: {}\nbaseline (already-seen listings): {}\nspec: {}\n\nsetup: kontu watch config --token <BotFather token> → message the bot → kontu watch config → kontu watch run --seed → kontu watch install",
+            if configured { "configured" } else { "not configured" },
+            seen.len(),
+            if spec.is_empty() { "empty (run `kontu spec set …`)" } else { "set" },
+        );
+        Ok(())
+    }
+}
+
+/// One detection cycle: pull → match → diff against the baseline → alert on new.
+async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<()> {
+    let cfg = Config::load()?;
+    require_telegram(&cfg)?;
+    let spec = Spec::load()?;
+    if spec.is_empty() {
+        anyhow::bail!("spec is empty — set criteria with `kontu spec set …` first");
+    }
+    if !a.no_pull {
+        pull_spec(client, &spec, a.scan).await;
+    }
+    let defaults = client.cost_defaults().await.unwrap_or_default();
+    let listings = fetch_spec_listings(client, &spec, a.scan).await?;
+    let matches: Vec<_> = crate::matching::rank(&spec, listings, &defaults)
+        .into_iter()
+        .filter(|m| m.score >= a.min_fit)
+        .collect();
+
+    let mut seen = watch::load_seen()?;
+    if a.seed {
+        for m in &matches {
+            seen.insert(m.id);
+        }
+        watch::save_seen(&seen)?;
+        ok(json, format!("seeded {} current matches as baseline (no alerts sent)", matches.len()));
+        return Ok(());
+    }
+
+    let fresh: Vec<_> = matches.iter().filter(|m| !seen.contains(&m.id)).collect();
+    let mut sent = 0usize;
+    let mut failed = 0usize;
+    for m in &fresh {
+        match telegram::send_message(&cfg.telegram_token, &cfg.telegram_chat_id, &watch::format_alert(m)).await {
+            Ok(()) => {
+                sent += 1;
+                seen.insert(m.id);
+            }
+            Err(e) => {
+                failed += 1;
+                eprintln!("kontu: telegram send failed for {}: {e}", m.id);
+            }
+        }
+    }
+    watch::save_seen(&seen)?;
+    if json {
+        emit(&json!({ "checked": matches.len(), "new": fresh.len(), "sent": sent, "failed": failed }))
+    } else {
+        println!("checked {} matches · {} new · {sent} alerted{}", matches.len(), fresh.len(), if failed > 0 { format!(" · {failed} failed") } else { String::new() });
+        Ok(())
+    }
+}
+
+fn require_telegram(cfg: &Config) -> Result<()> {
+    if cfg.telegram_token.is_empty() || cfg.telegram_chat_id.is_empty() {
+        anyhow::bail!(
+            "telegram not configured — run `kontu watch config --token <BotFather token>`, message your bot, then `kontu watch config`"
+        );
+    }
+    Ok(())
+}
+
+/// Fetch the candidate listings the spec ranks over. Multi-municipality specs are
+/// fetched per area and merged so a cheapest-nationwide truncation can't drop them.
+async fn fetch_spec_listings(client: &KontuClient, spec: &Spec, scan: usize) -> Result<Vec<Listing>> {
+    let mut filter = spec_to_filter(spec);
+    if spec.municipalities.len() >= 2 {
+        let mut all = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for m in &spec.municipalities {
+            filter.municipality = Some(m.clone());
+            let page = client
+                .list_listings(&filter, SortColumn::Price, false, scan as u32, 0)
+                .await?;
+            for l in page.listings {
+                if seen.insert(l.id) {
+                    all.push(l);
+                }
+            }
+        }
+        Ok(all)
+    } else {
+        Ok(client
+            .list_listings(&filter, SortColumn::Price, false, scan as u32, 0)
+            .await?
+            .listings)
+    }
 }
 
 fn spec_to_filter(spec: &Spec) -> FilterState {
@@ -794,6 +1036,34 @@ fn print_spec(s: &Spec) {
     if s.is_empty() {
         println!("(empty — set it with `kontu spec set ...`)");
     }
+}
+
+/// `list --sort risk` over the REAL computed RiskScore. The Worker's SQL proxy
+/// (description token count) is misleading, so pull a generous candidate window,
+/// assess each listing locally, then sort and truncate. The window is capped at
+/// `RISK_CANDIDATES` cheapest matches — ample for any single municipality.
+async fn risk_sorted_page(
+    client: &KontuClient,
+    filter: &FilterState,
+    desc: bool,
+    limit: u32,
+) -> anyhow::Result<ListingsPage> {
+    const RISK_CANDIDATES: u32 = 1000;
+    let mut page = client
+        .list_listings(filter, SortColumn::Price, false, RISK_CANDIDATES, 0)
+        .await?;
+    page.listings.sort_by_key(|l| {
+        // "ei_rantaa" contains "ranta", so match the actual waterfront kinds.
+        let near_water = l
+            .shore
+            .as_deref()
+            .map(|s| s.contains("oma_ranta") || s.contains("rantaoik"))
+            .unwrap_or(false);
+        let score = risk::assess(&l.to_risk_input(near_water), 2026).score;
+        if desc { u32::MAX - score } else { score }
+    });
+    page.listings.truncate(limit as usize);
+    Ok(page)
 }
 
 fn assess(detail: &ListingDetail) -> RiskAssessment {

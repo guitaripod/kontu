@@ -15,6 +15,10 @@ pub struct Config {
     pub api_token: String,
     /// Active color theme name.
     pub theme: String,
+    /// Telegram bot token for `kontu watch` new-listing alerts (from @BotFather).
+    pub telegram_token: String,
+    /// Telegram chat id alerts are delivered to (auto-detected on first message).
+    pub telegram_chat_id: String,
 }
 
 impl Default for Config {
@@ -23,6 +27,8 @@ impl Default for Config {
             server_url: "http://localhost:8787".to_string(),
             api_token: String::new(),
             theme: "default".to_string(),
+            telegram_token: String::new(),
+            telegram_chat_id: String::new(),
         }
     }
 }
@@ -54,6 +60,19 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Parse the on-disk config WITHOUT applying environment overrides. Use this
+    /// before any `save()` so env-only secrets (e.g. `KONTU_API_TOKEN`) are not
+    /// persisted into the file.
+    pub fn load_raw() -> Result<Self> {
+        let path = Self::config_path()?;
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
     fn apply_env_overrides(&mut self) {
         if let Ok(v) = std::env::var("KONTU_SERVER_URL")
             && !v.is_empty() {
@@ -62,6 +81,14 @@ impl Config {
         if let Ok(v) = std::env::var("KONTU_API_TOKEN")
             && !v.is_empty() {
                 self.api_token = v;
+            }
+        if let Ok(v) = std::env::var("KONTU_TELEGRAM_TOKEN")
+            && !v.is_empty() {
+                self.telegram_token = v;
+            }
+        if let Ok(v) = std::env::var("KONTU_TELEGRAM_CHAT_ID")
+            && !v.is_empty() {
+                self.telegram_chat_id = v;
             }
     }
 

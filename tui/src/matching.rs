@@ -39,6 +39,18 @@ fn has(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|n| text.contains(n))
 }
 
+/// Lowercase + strip Finnish diacritics, mirroring the Worker's `asciiFold` so a
+/// spec `--type mökki` matches a listing stored (folded) as `mokki`.
+fn fold_ascii(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'ä' | 'å' | 'Ä' | 'Å' => 'a',
+            'ö' | 'Ö' => 'o',
+            other => other.to_ascii_lowercase(),
+        })
+        .collect()
+}
+
 fn shore_signal(l: &Listing, desc: &str) -> f64 {
     let structured: f64 = match l.shore.as_deref() {
         Some(s) if s.contains("oma_ranta") => 1.0,
@@ -179,8 +191,8 @@ fn passes_hard(spec: &Spec, l: &Listing, s: &Signals) -> bool {
             return false;
         }
     if !spec.property_types.is_empty() {
-        let t = l.property_type.as_deref().unwrap_or("").to_lowercase();
-        if !spec.property_types.iter().any(|want| t.contains(&want.to_lowercase())) {
+        let t = fold_ascii(l.property_type.as_deref().unwrap_or(""));
+        if !spec.property_types.iter().any(|want| t.contains(&fold_ascii(want))) {
             return false;
         }
     }
@@ -355,4 +367,24 @@ fn reasons(c: &Candidate, tco: f64) -> Vec<String> {
             r.push("below-market price".into());
         }
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fold_matches_diacritic_spelling_to_stored_ascii() {
+        assert_eq!(fold_ascii("mökki"), "mokki");
+        assert_eq!(fold_ascii("Mökki"), "mokki");
+        assert_eq!(fold_ascii("omakotitalo"), "omakotitalo");
+        assert!(fold_ascii("mokki").contains(&fold_ascii("mökki")));
+    }
+
+    #[test]
+    fn avoided_trait_present_scores_below_absent() {
+        assert_eq!(pref_signal(Pref::Avoid, 1.0), 0.0);
+        assert_eq!(pref_signal(Pref::Avoid, 0.0), 1.0);
+        assert_eq!(pref_signal(Pref::Required, 1.0), 1.0);
+    }
 }
