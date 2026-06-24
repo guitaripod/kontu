@@ -245,9 +245,9 @@ export function normalizeShore(raw: unknown): string | null {
   const s = asciiFold(raw);
   if (s === "") return null;
   if (/oma\s*ranta|omarant/.test(s)) return "oma_ranta";
-  if (/rantaoikeus|ranta-oikeus/.test(s)) return "rantaoikeus";
+  if (/rantaoikeus|ranta-oikeus|yhteisrant|yhteinen ranta/.test(s)) return "rantaoikeus";
   if (/ei\s*rantaa|ei_rantaa|ranta:?\s*ei/.test(s)) return "ei_rantaa";
-  return s;
+  return null;
 }
 
 export function normalizePlotOwnership(raw: unknown): string | null {
@@ -483,7 +483,7 @@ export function normalizeConditionClass(raw: unknown): string | null {
   if (/valttav/.test(s)) return "välttävä";
   if (/huono/.test(s)) return "huono";
   if (/uudis/.test(s)) return "uudiskohde";
-  return s;
+  return null;
 }
 
 /** Normalize the Oikotie water-body label ("Rannan (vesistön) tyyppi"). */
@@ -494,7 +494,7 @@ export function normalizeWaterBody(raw: unknown): string | null {
   if (/joki/.test(s)) return "joki";
   if (/meri/.test(s)) return "meri";
   if (/lampi/.test(s)) return "lampi";
-  return s;
+  return null;
 }
 
 /** First 4-digit year in a string (e.g. a renovation note "Kattoremontti 2023"). */
@@ -503,17 +503,33 @@ function firstYear(raw: unknown): number | null {
   return m ? Number(m[0]) : null;
 }
 
-/** Latest year tied to a plumbing/sewer renovation in the "Tehdyt remontit" text. */
+/**
+ * Latest year of an actual plumbing/sewer RENOVATION in the renovations text.
+ * Only a segment that has a plumbing keyword AND a renovation verb (and is not a
+ * build-year statement) qualifies, and the year nearest the plumbing keyword is
+ * taken — so "Rakennusvuosi 2016 … lvi" or "remontoitu 2021 … putket uusittu 2005"
+ * don't leak the build/unrelated year into the risk model.
+ */
 function pipeRenovationYear(raw: unknown): number | null {
   if (typeof raw !== "string") return null;
+  const PIPE = /(viemär|putki|jätevesi|käyttövesi|vesijohto|lvi[- ]?(saneer|remont|uusi))/iu;
+  const RENO = /(uusit|remontoi|saneerat|uudistet|uusinta|asennett|peruskorjat)/iu;
+  const BUILD = /(rakennusvuosi|rakennettu|valmistunut)/iu;
   let best: number | null = null;
-  for (const m of raw.matchAll(/\b(19|20)\d{2}\b[^.,;]*?(viemär|putki|jätevesi|käyttövesi|lvi|vesijohto)/giu)) {
-    const y = Number(m[0].match(/\b(19|20)\d{2}\b/)?.[0]);
-    if (Number.isFinite(y) && (best === null || y > best)) best = y;
-  }
-  for (const m of raw.matchAll(/(viemär|putki|jätevesi|käyttövesi|lvi|vesijohto)[^.,;]*?\b((19|20)\d{2})\b/giu)) {
-    const y = Number(m[2]);
-    if (Number.isFinite(y) && (best === null || y > best)) best = y;
+  for (const seg of raw.split(/[.,;\n]/)) {
+    if (BUILD.test(seg) || !RENO.test(seg)) continue;
+    const pipe = seg.search(PIPE);
+    if (pipe < 0) continue;
+    let nearest: number | null = null;
+    let nearestDist = Infinity;
+    for (const m of seg.matchAll(/\b(19|20)\d{2}\b/g)) {
+      const dist = Math.abs((m.index ?? 0) - pipe);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearest = Number(m[0]);
+      }
+    }
+    if (nearest !== null && (best === null || nearest > best)) best = nearest;
   }
   return best;
 }
@@ -540,11 +556,18 @@ function applyOikotieDetail(row: NormalizedListing, c: Record<string, unknown>):
   set("energy_class", normalizeEnergyClass(dv("Energialuokka")));
   set("frame_material", dv("Rakennusmateriaali"));
   set("roof_material", dv("Kattomateriaali"));
-  set("water_supply", dv("Kunnallistekniikka"));
+  // "Kunnallistekniikka" is combined municipal infra ("Vesi, Sähkö, Viemäri"): split it.
+  const muni = dv("Kunnallistekniikka");
+  if (muni) {
+    if (/vesi|vesijohto/i.test(muni)) set("water_supply", "kunnallinen");
+    if (/viemär/i.test(muni)) set("sewer_system", "kunnallinen viemäri");
+  }
   set("year_built", toInt(dv("Rakennusvuosi")) ?? row.year_built);
   set("roof_year", firstYear(dv("Kattoremontti")));
   set("pipes_renovated_year", pipeRenovationYear(dv("Tehdyt remontit")) ?? pipeRenovationYear(full));
-  if (/oma ranta|rantasauna/i.test(full ?? "") && !row.shore) row.shore = "oma_ranta";
+  // Only the explicit "oma ranta" literal asserts owned shore; a rantasauna can sit
+  // on a shared shore, so it must not coerce shore ownership.
+  if (/\boma ranta\b/i.test(full ?? "") && !row.shore) row.shore = "oma_ranta";
 }
 
 const FINNISH_COUNTRY = /^(suomi|finland|finnland)$/i;

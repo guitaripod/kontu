@@ -355,6 +355,38 @@ describe("oikotie detail enrichment", () => {
     expect(n.roof_year).toBeNull();
     expect(n.year_built).toBe(2000);
   });
+
+  it("does not mistake a build year or unrelated reno year for the pipe-renovation year", () => {
+    const buildLeak = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      details: { "Tehdyt remontit": "Rakennusvuosi 2016, lvi kunnossa" },
+    });
+    expect(buildLeak.pipes_renovated_year).toBeNull();
+    const nearest = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      details: { "Tehdyt remontit": "Keittiö remontoitu 2021. Käyttövesiputket uusittu 2005." },
+    });
+    expect(nearest.pipes_renovated_year).toBe(2005);
+  });
+
+  it("does not coerce shore to oma_ranta just from a rantasauna mention", () => {
+    const n = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      fullDescription: "Tontilla on rantasauna yhteisen rannan tuntumassa.",
+    });
+    expect(n.shore).toBeNull();
+  });
+
+  it("maps a shared shore (yhteisranta) to rantaoikeus, drops unknown labels", () => {
+    expect(
+      normalizeOikotieCard({ id: "z", buildingData: { buildingType: 4 }, details: { "Rannan omistus": "Yhteisranta" } })
+        .shore,
+    ).toBe("rantaoikeus");
+    expect(
+      normalizeOikotieCard({ id: "z", buildingData: { buildingType: 4 }, details: { Kunto: "Ei arvioitu" } })
+        .condition_class,
+    ).toBeNull();
+  });
 });
 
 describe("contentHash", () => {

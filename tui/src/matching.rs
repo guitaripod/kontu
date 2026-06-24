@@ -152,10 +152,20 @@ fn infra_signal(l: &Listing, desc: &str) -> f64 {
 /// Year-round liveability: 1.0 = clearly winterized, ~0.1 = clearly summer-only.
 /// Explicit text wins; otherwise a non-leisure house is year-round by construction,
 /// while a mökki is inferred from central heating and plumbed (not carried) water.
+/// A bare buildable plot / teardown, not a move-in home: explicit demolition, or
+/// "build here" language on a listing with no real dwelling. NOT triggered by
+/// `rakennusoikeutta jäljellä` (spare building rights) — that's a feature of an
+/// existing home, common on the spacious lakeside plots the buyer wants.
+fn is_buildable_plot(l: &Listing, desc: &str) -> bool {
+    if has(desc, &["purettav", "purkukunt"]) {
+        return true;
+    }
+    let no_dwelling = l.living_area_m2.map(|a| a < 20.0).unwrap_or(true);
+    no_dwelling && has(desc, &["rakennuspaik", "mahdollisuus rakentaa", "rakentaa ympärivuoti"])
+}
+
 fn winter_signal(l: &Listing, desc: &str) -> f64 {
-    // A plot/fixer sold on the *potential* to build year-round, or for demolition,
-    // is not a move-in year-round home ("mahdollisuus rakentaa ympärivuotiseen…").
-    if has(desc, &["rakennuspaik", "rakennusoikeu", "rakentaa ympärivuoti", "mahdollisuus rakentaa", "purettav", "purkukunt"]) {
+    if is_buildable_plot(l, desc) {
         return 0.15;
     }
     if has(desc, &["ei talviasut", "vain kesä", "kesäkäyt", "kesämök", "kesäasun", "kesahuvila", "ei lämmi"]) {
@@ -202,7 +212,10 @@ fn winter_signal(l: &Listing, desc: &str) -> f64 {
 /// Explicit "good condition" / "needs renovation" text wins; otherwise build year
 /// drives it (the ~1960–85 valesokkeli/putki era is penalized; newer is better).
 fn condition_signal(l: &Listing, desc: &str) -> f64 {
-    if has(desc, &["remontin tarp", "remontoitav", "peruskorjauksen tarp", "peruskorjattava", "purkukunt", "purettav", "huonokuntoi", "korjausvel", "kosteusvaur", "homevaur", "asumiskelvot", "rakennuspaik", "rakennusoikeu"]) {
+    if is_buildable_plot(l, desc) {
+        return 0.2;
+    }
+    if has(desc, &["remontin tarp", "remontoitav", "peruskorjauksen tarp", "peruskorjattava", "huonokuntoi", "korjausvel", "kosteusvaur", "homevaur", "asumiskelvot"]) {
         return 0.2;
     }
     let mut base: f64 = if has(desc, &["muuttovalmi", "hyväkuntoi", "erinomaisessa kun", "erinomainen kun", "täysin remontoi", "remontoitu", "peruskorjattu", "uudisveroi", "hyvin pidet"]) {
@@ -556,10 +569,28 @@ mod tests {
 
     #[test]
     fn buildable_plot_is_not_year_round_or_good_condition() {
-        let plot = Listing { property_type: Some("omakotitalo".into()), ..Default::default() };
-        let desc = "mahdollisuus rakentaa ympärivuotiseen käyttöön, rakennusoikeutta jäljellä";
-        assert!(winter_signal(&plot, desc) < 0.3, "build-for-year-round must not read year-round");
+        let plot = Listing {
+            property_type: Some("omakotitalo".into()),
+            living_area_m2: None,
+            ..Default::default()
+        };
+        let desc = "rakennuspaikka järven rannalla, mahdollisuus rakentaa ympärivuotiseen";
+        assert!(winter_signal(&plot, desc) < 0.3, "a bare buildable plot must not read year-round");
         assert!(condition_signal(&plot, desc) <= 0.3, "a buildable plot is not good condition");
+    }
+
+    #[test]
+    fn real_home_with_spare_building_rights_is_not_dropped() {
+        // "rakennusoikeutta jäljellä" = spare building rights, a FEATURE of a real home.
+        let home = Listing {
+            property_type: Some("omakotitalo".into()),
+            living_area_m2: Some(95.0),
+            year_built: Some(2005),
+            description: Some("Hyväkuntoinen talo, rakennusoikeutta jäljellä 120 m².".into()),
+            ..Default::default()
+        };
+        assert!(!is_buildable_plot(&home, "rakennusoikeutta jäljellä 120 m²"));
+        assert!(condition_signal(&home, "hyväkuntoinen, rakennusoikeutta jäljellä") >= 0.9);
     }
 
     #[test]

@@ -62,10 +62,11 @@ fn parse_detail(html: &str) -> Value {
             let end = scope[gt..].find("</dd>")? + gt;
             Some(strip_html(&scope[gt..end]))
         });
-        if let Some(val) = val {
-            if !key.is_empty() && !val.is_empty() {
-                details.entry(key).or_insert(Value::String(val));
-            }
+        if let Some(val) = val
+            && !key.is_empty()
+            && !val.is_empty()
+        {
+            details.entry(key).or_insert(Value::String(val));
         }
         pos = kend + "</dt>".len();
     }
@@ -95,6 +96,23 @@ async fn fetch_detail(http: &Client, url: &str) -> Option<Value> {
     Some(parse_detail(&html))
 }
 
+/// The detail-page URL for an Oikotie card. `/api/cards` usually carries `url`, but
+/// fall back to `links.self` and then the canonical id-derived path so enrichment
+/// never silently no-ops if a card omits the field.
+fn oikotie_card_url(c: &Value) -> Option<String> {
+    if let Some(u) = c.get("url").and_then(Value::as_str) {
+        return Some(u.to_string());
+    }
+    if let Some(u) = c.pointer("/links/self").and_then(Value::as_str) {
+        return Some(u.to_string());
+    }
+    let id = c
+        .get("id")
+        .or_else(|| c.get("cardId"))
+        .and_then(|v| v.as_i64().map(|n| n.to_string()).or_else(|| v.as_str().map(str::to_string)))?;
+    Some(format!("https://asunnot.oikotie.fi/myytavat-asunnot/{id}"))
+}
+
 /// Fetch each card's detail page (bounded concurrency) and fold the structured
 /// info-table + full description back into the card for the Worker to normalize.
 async fn enrich_cards(http: &Client, cards: &mut [Value]) {
@@ -102,7 +120,7 @@ async fn enrich_cards(http: &Client, cards: &mut [Value]) {
     let jobs: Vec<(usize, String)> = cards
         .iter()
         .enumerate()
-        .filter_map(|(i, c)| c.get("url").and_then(Value::as_str).map(|u| (i, u.to_string())))
+        .filter_map(|(i, c)| oikotie_card_url(c).map(|u| (i, u)))
         .collect();
     let enriched: Vec<(usize, Option<Value>)> = stream::iter(jobs)
         .map(|(i, url)| {
@@ -306,7 +324,12 @@ pub async fn pull_oikotie(
     limit: usize,
     deep: bool,
 ) -> Result<Value> {
-    let http = Client::builder().user_agent(UA).gzip(true).build()?;
+    let http = Client::builder()
+        .user_agent(UA)
+        .gzip(true)
+        .timeout(Duration::from_secs(20))
+        .connect_timeout(Duration::from_secs(8))
+        .build()?;
     let session = handshake(&http).await?;
     let loc = match municipality {
         Some(m) => Some(resolve_location(&http, &session, m).await?),
@@ -466,6 +489,8 @@ pub async fn pull_etuovi(
         .user_agent(UA)
         .default_headers(headers)
         .gzip(true)
+        .timeout(Duration::from_secs(20))
+        .connect_timeout(Duration::from_secs(8))
         .build()?;
 
     let loc_terms = match municipality {
