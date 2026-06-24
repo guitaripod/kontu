@@ -6,6 +6,7 @@ import {
   fingerprint,
   normalizeEtuoviAnnouncement,
   normalizeOikotieCard,
+  normalizePropertyType,
   toNumber,
 } from "../src/normalize";
 
@@ -154,37 +155,89 @@ describe("normalizeOikotieCard", () => {
   });
 });
 
+describe("normalizePropertyType", () => {
+  it("maps Etuovi English propertySubtype enums to Finnish tokens", () => {
+    expect(normalizePropertyType("DETACHED_HOUSE")).toBe("omakotitalo");
+    expect(normalizePropertyType("SEPARATE_HOUSE")).toBe("erillistalo");
+    expect(normalizePropertyType("SEMI_DETACHED_HOUSE")).toBe("paritalo");
+    expect(normalizePropertyType("ROW_HOUSE")).toBe("rivitalo");
+    expect(normalizePropertyType("COTTAGE")).toBe("mokki");
+    expect(normalizePropertyType("APARTMENT_HOUSE")).toBe("kerrostalo");
+  });
+
+  it("still maps Finnish tokens and is total on empty", () => {
+    expect(normalizePropertyType("Omakotitalo")).toBe("omakotitalo");
+    expect(normalizePropertyType("")).toBeNull();
+    expect(normalizePropertyType(null)).toBeNull();
+  });
+});
+
 describe("normalizeEtuoviAnnouncement", () => {
   const announcement = {
+    id: 7654321,
     friendlyId: "abc-987",
-    propertyType: "Rivitalo",
+    propertySubtype: "ROW_HOUSE",
     holdingType: "Asunto-osake",
-    address: "Niskakatu 9",
-    city: "Joensuu",
+    addressLine1: "Niskakatu 9",
+    addressLine2: "Keskusta Joensuu",
     postalCode: "80100",
-    price: "168000",
+    searchPrice: 168000,
     unencumberedSalesPrice: "172000",
-    area: "72",
-    roomCount: "3",
-    constructionYear: "2004",
+    area: 72,
+    totalArea: 78,
+    roomCount: "3 huonetta",
+    roomStructure: "3h+k+s",
+    constructionFinishedYear: 2004,
+    residentialFloorCount: 2,
+    latitude: 62.601,
+    longitude: 29.7636,
     energyClass: "C",
     heating: "Kaukolämpö",
-    description: "Hyväkuntoinen, kaukolämpö, ei rantaa.",
+    searchListItemText: "Hyväkuntoinen, kaukolämpö, ei rantaa.",
   };
 
-  it("maps core fields", () => {
+  it("maps the live listpage fields", () => {
     const n = normalizeEtuoviAnnouncement(announcement);
     expect(n.portal).toBe("etuovi");
     expect(n.portal_listing_id).toBe("abc-987");
+    expect(n.url).toBe("https://www.etuovi.com/kohde/abc-987");
     expect(n.property_type).toBe("rivitalo");
     expect(n.holding_form).toBe("asunto_osake");
+    expect(n.address).toBe("Niskakatu 9");
     expect(n.municipality).toBe("Joensuu");
+    expect(n.district).toBe("Keskusta");
+    expect(n.postal_code).toBe("80100");
     expect(n.price_eur).toBe(168000);
     expect(n.debt_free_price_eur).toBe(172000);
     expect(n.living_area_m2).toBe(72);
+    expect(n.total_area_m2).toBe(78);
+    expect(n.room_count).toBe(3);
+    expect(n.room_layout).toBe("3h+k+s");
+    expect(n.floors).toBe(2);
     expect(n.year_built).toBe(2004);
+    expect(n.lat).toBe(62.601);
+    expect(n.lon).toBe(29.7636);
     expect(n.energy_class).toBe("C");
     expect(n.heating_type).toBe("kaukolampo");
+    expect(n.description).toBe("Hyväkuntoinen, kaukolämpö, ei rantaa.");
+  });
+
+  it("uses friendlyId (not the numeric id) for the listing id and url", () => {
+    const n = normalizeEtuoviAnnouncement({ id: 999, friendlyId: "x-1" });
+    expect(n.portal_listing_id).toBe("x-1");
+    expect(n.url).toBe("https://www.etuovi.com/kohde/x-1");
+  });
+
+  it("derives municipality from the last token of addressLine2", () => {
+    expect(normalizeEtuoviAnnouncement({ friendlyId: "z", addressLine2: "Kilo Espoo" }).municipality).toBe(
+      "Espoo",
+    );
+    expect(normalizeEtuoviAnnouncement({ friendlyId: "z", addressLine2: "Kilo Espoo" }).district).toBe(
+      "Kilo",
+    );
+    const single = normalizeEtuoviAnnouncement({ friendlyId: "z", addressLine2: "Helsinki" });
+    expect(single.municipality).toBe("Helsinki");
+    expect(single.district).toBeNull();
   });
 
   it("never throws on empty/garbage input", () => {

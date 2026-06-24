@@ -136,6 +136,20 @@ pub struct Listing {
     pub days_on_market: Option<i64>,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub fairness: Option<Fairness>,
+}
+
+/// Price-fairness vs the area benchmark (MML detached-house median / StatFin €/m²).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Fairness {
+    pub band: String,
+    #[serde(default)]
+    pub ratio: Option<f64>,
+    #[serde(default)]
+    pub benchmark: Option<f64>,
+    #[serde(default)]
+    pub confidence: String,
 }
 
 fn default_status() -> String {

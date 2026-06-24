@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { api } from "./api/listings";
 import { crawlTick } from "./crawl";
 import { enrichBatch } from "./geo";
+import { marketIsStale, refreshMarketStats } from "./fairprice";
 
 export interface Env {
   DB: D1Database;
@@ -65,5 +66,10 @@ async function runScheduled(env: Env): Promise<void> {
     await enrichBatch(env.DB, 5);
   } catch (err) {
     console.warn("scheduled enrichment failed", String(err));
+  }
+  try {
+    if (await marketIsStale(env.DB)) await refreshMarketStats(env.DB);
+  } catch (err) {
+    console.warn("scheduled market refresh failed", String(err));
   }
 }

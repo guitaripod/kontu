@@ -34,7 +34,8 @@ import {
 } from "../db";
 import { crawlTick } from "../crawl";
 import { enrichBatch } from "../geo";
-import { normalizeOikotieCard } from "../normalize";
+import { normalizeOikotieCard, normalizeEtuoviAnnouncement } from "../normalize";
+import { computeFairness, loadMedians, marketIsStale, refreshMarketStats } from "../fairprice";
 
 export const api = new Hono<{ Bindings: Env }>();
 
@@ -43,11 +44,13 @@ const INTEGER_DEFAULT_KEYS = new Set(["loan_term_years"]);
 api.get("/listings", async (c) => {
   const filter = parseListingsFilter(c.req.query.bind(c.req), c.req.queries.bind(c.req));
   const { listings, total } = await queryListings(c.env.DB, filter);
+  const medians = await loadMedians(c.env.DB);
   const enriched = listings.map((l) => ({
     ...l,
     risk_structures: parseJsonArray(l.risk_structures),
     days_on_market: daysOnMarket(l.first_seen),
     price_per_m2: l.price_per_m2 ?? derivePpm2(l.price_eur, l.living_area_m2),
+    fairness: computeFairness(medians, l.municipality, l.price_eur),
   }));
   return c.json({ listings: enriched, total });
 });
@@ -67,6 +70,7 @@ api.get("/listings/:id", async (c) => {
     getTags(c.env.DB, id),
   ]);
   const dossier = listing.property_id != null ? await getDossier(c.env.DB, listing.property_id) : null;
+  const medians = await loadMedians(c.env.DB);
 
   return c.json({
     listing: {
@@ -74,6 +78,7 @@ api.get("/listings/:id", async (c) => {
       risk_structures: parseJsonArray(listing.risk_structures),
       days_on_market: daysOnMarket(listing.first_seen),
       price_per_m2: listing.price_per_m2 ?? derivePpm2(listing.price_eur, listing.living_area_m2),
+      fairness: computeFairness(medians, listing.municipality, listing.price_eur),
     },
     events,
     photos,
@@ -107,20 +112,35 @@ api.get("/properties/:id", async (c) => {
 api.post("/sync", async (c) => {
   const tick = await crawlTick(c.env.DB, c.env.PHOTOS);
   const enriched = await enrichBatch(c.env.DB, 3);
+  try {
+    if (await marketIsStale(c.env.DB)) await refreshMarketStats(c.env.DB);
+  } catch {
+    /* best-effort: never block a sync on Plane-B benchmark refresh */
+  }
   return c.json({ tick, enriched });
 });
 
 api.post("/import", async (c) => {
-  const body: { source?: string; cards?: unknown[] } = await c.req
-    .json<{ source?: string; cards?: unknown[] }>()
-    .catch(() => ({ cards: [] }));
-  const cards = Array.isArray(body.cards) ? body.cards : [];
+  const body: { source?: string; cards?: unknown[]; announcements?: unknown[] } = await c.req
+    .json<{ source?: string; cards?: unknown[]; announcements?: unknown[] }>()
+    .catch(() => ({}));
+  const isEtuovi =
+    body.source === "etuovi" || (!Array.isArray(body.cards) && Array.isArray(body.announcements));
+  const items = isEtuovi
+    ? Array.isArray(body.announcements)
+      ? body.announcements
+      : []
+    : Array.isArray(body.cards)
+      ? body.cards
+      : [];
+  const normalize = isEtuovi ? normalizeEtuoviAnnouncement : normalizeOikotieCard;
+
   let inserted = 0;
   let updated = 0;
   let skipped = 0;
-  for (const card of cards) {
+  for (const item of items) {
     try {
-      const n = normalizeOikotieCard(card);
+      const n = normalize(item);
       if (!n.portal_listing_id) {
         skipped++;
         continue;
@@ -133,7 +153,20 @@ api.post("/import", async (c) => {
       skipped++;
     }
   }
-  return c.json({ source: body.source ?? "oikotie", received: cards.length, inserted, updated, skipped });
+
+  try {
+    if (await marketIsStale(c.env.DB)) await refreshMarketStats(c.env.DB);
+  } catch {
+    /* best-effort: warm Plane-B benchmarks after a pull */
+  }
+
+  return c.json({
+    source: body.source ?? (isEtuovi ? "etuovi" : "oikotie"),
+    received: items.length,
+    inserted,
+    updated,
+    skipped,
+  });
 });
 
 api.get("/cost-defaults", async (c) => {

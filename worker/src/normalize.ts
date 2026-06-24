@@ -184,9 +184,22 @@ const PROPERTY_TYPE_MAP: Array<[RegExp, string]> = [
   [/maatila|tila\b/, "maatila"],
 ];
 
+/** Etuovi listpage `propertySubtype` English enums → Finnish type tokens. */
+const ENGLISH_TYPE_ENUMS: Record<string, string> = {
+  detached_house: "omakotitalo",
+  separate_house: "erillistalo",
+  semi_detached_house: "paritalo",
+  row_house: "rivitalo",
+  cottage: "mokki",
+  apartment_house: "kerrostalo",
+};
+
 export function normalizePropertyType(raw: unknown): string | null {
   const s = asciiFold(raw);
   if (s === "") return null;
+  const englishKey = s.replace(/[\s-]+/g, "_");
+  const mapped = ENGLISH_TYPE_ENUMS[englishKey];
+  if (mapped) return mapped;
   for (const [re, val] of PROPERTY_TYPE_MAP) {
     if (re.test(s)) return val;
   }
@@ -441,67 +454,76 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
   return row;
 }
 
+/** Parse the leading integer of an Etuovi `roomCount` (e.g. "3 huonetta" → 3). */
+function leadingInt(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? Math.trunc(v) : null;
+  const m = String(v).match(/-?\d+/);
+  return m ? Number(m[0]) : null;
+}
+
+/** Last whitespace-separated token of an Etuovi `addressLine2` (the municipality). */
+function lastToken(v: unknown): string | null {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (s === "") return null;
+  const parts = s.split(/\s+/);
+  return parts[parts.length - 1] ?? null;
+}
+
+/** `addressLine2` minus its last token (the district), or null if nothing remains. */
+function withoutLastToken(v: unknown): string | null {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (s === "") return null;
+  const parts = s.split(/\s+/);
+  if (parts.length <= 1) return null;
+  return parts.slice(0, -1).join(" ") || null;
+}
+
 /**
- * Map an Etuovi announcement object into a NormalizedListing. Etuovi nests most
- * useful fields; this reads several candidate paths defensively.
+ * Map a live Etuovi `listpage` announcement into a NormalizedListing. Field
+ * mapping verified against the real listpage shape; every access is defensive
+ * and the function never throws on missing/garbage input.
  */
 export function normalizeEtuoviAnnouncement(announcement: unknown): NormalizedListing {
   const a = (announcement ?? {}) as Record<string, unknown>;
-  const id =
-    firstString(a["friendlyId"], a["id"], a["announcementId"], get(a, "searchListItem.friendlyId")) ?? "";
-  const url =
-    firstString(a["url"], a["link"]) ??
-    (id ? `https://www.etuovi.com/kohde/${id}` : "https://www.etuovi.com/");
+  const friendlyId = firstString(a["friendlyId"]);
+  const id = friendlyId ?? firstString(a["id"], a["announcementId"]) ?? "";
+  const url = friendlyId
+    ? `https://www.etuovi.com/kohde/${friendlyId}`
+    : (firstString(a["url"], a["link"]) ?? "https://www.etuovi.com/");
 
-  const description =
-    firstString(a["description"], a["searchListItemText"], get(a, "property.description")) ?? "";
-  const address = firstString(
-    a["address"],
-    get(a, "addressLine"),
-    get(a, "property.address.streetAddress"),
-    get(a, "searchListItem.address"),
-  );
+  const description = firstString(a["searchListItemText"], a["description"]) ?? "";
+  const addressLine2 = a["addressLine2"];
 
   const row: NormalizedListing = {
     portal: "etuovi",
     portal_listing_id: id,
     url,
-    property_type: normalizePropertyType(
-      firstString(a["propertyType"], a["realtyType"], get(a, "property.realtyType")) ?? description,
-    ),
+    property_type: normalizePropertyType(firstString(a["propertySubtype"]) ?? description),
     holding_form: normalizeHoldingForm(
       firstString(a["holdingType"], a["ownershipType"], get(a, "property.holdingType")),
     ),
     kiinteistotunnus: firstString(a["propertyIdentifier"], a["kiinteistotunnus"]),
-    address,
-    municipality: firstString(
-      a["city"],
-      get(a, "property.address.postOffice"),
-      get(a, "address.city"),
-      a["municipality"],
-    ),
-    postal_code: firstString(
-      a["postalCode"],
-      get(a, "property.address.postalCode"),
-      get(a, "address.postalCode"),
-    ),
-    district: firstString(a["district"], get(a, "property.address.district")),
-    lat: toNumber(firstString(get(a, "coordinates.latitude"), get(a, "location.latitude"), a["latitude"])),
-    lon: toNumber(firstString(get(a, "coordinates.longitude"), get(a, "location.longitude"), a["longitude"])),
-    price_eur: toInt(firstString(a["price"], a["sellingPrice"], get(a, "property.price"))),
+    address: firstString(a["addressLine1"]),
+    municipality: lastToken(addressLine2),
+    postal_code: firstString(a["postalCode"], get(a, "address.postalCode")),
+    district: withoutLastToken(addressLine2),
+    lat: toNumber(firstString(a["latitude"], get(a, "coordinates.latitude"))),
+    lon: toNumber(firstString(a["longitude"], get(a, "coordinates.longitude"))),
+    price_eur: toInt(firstString(a["searchPrice"], a["price"], a["sellingPrice"])),
     debt_free_price_eur: toInt(firstString(a["debtFreePrice"], a["unencumberedSalesPrice"])),
     debt_share_eur: toInt(firstString(a["debtShare"], a["shareOfLiabilities"])),
     price_per_m2: toNumber(firstString(a["pricePerSquareMeter"], a["pricePerM2"])),
     maintenance_charge_eur: toInt(firstString(a["maintenanceCharge"], a["careCharge"])),
     financing_charge_eur: toInt(a["financingCharge"]),
     ground_rent_eur_yr: toInt(a["groundRent"]),
-    living_area_m2: toNumber(firstString(a["area"], a["livingArea"], get(a, "property.area"))),
+    living_area_m2: toNumber(firstString(a["area"], a["livingArea"])),
     total_area_m2: toNumber(firstString(a["totalArea"], a["overallArea"])),
-    plot_area_m2: toNumber(firstString(a["lotArea"], a["plotArea"], get(a, "property.lotArea"))),
-    room_count: toNumber(firstString(a["roomCount"], a["numberOfRooms"])),
-    room_layout: firstString(a["roomLayout"], a["roomConfiguration"]),
-    floors: toNumber(firstString(a["floor"], a["numberOfFloors"])),
-    year_built: toInt(firstString(a["constructionYear"], a["yearBuilt"], get(a, "property.constructionYear"))),
+    plot_area_m2: toNumber(firstString(a["lotArea"], a["plotArea"])),
+    room_count: leadingInt(a["roomCount"]),
+    room_layout: firstString(a["roomStructure"], a["roomLayout"]),
+    floors: toNumber(firstString(a["residentialFloorCount"], a["floor"], a["numberOfFloors"])),
+    year_built: toInt(firstString(a["constructionFinishedYear"], a["constructionYear"], a["yearBuilt"])),
     occupancy_year: toInt(a["occupancyYear"]),
     condition_class: firstString(a["condition"], a["conditionClassType"]),
     inspection_status: firstString(a["inspectionStatus"]),

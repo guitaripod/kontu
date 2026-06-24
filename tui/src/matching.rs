@@ -345,5 +345,10 @@ fn reasons(c: &Candidate, tco: f64) -> Vec<String> {
     if c.risk < 25 {
         r.push("low risk".into());
     }
+    if let Some(f) = &c.listing.fairness {
+        if matches!(f.band.as_str(), "underpriced" | "below_market") {
+            r.push("below-market price".into());
+        }
+    }
     r
 }

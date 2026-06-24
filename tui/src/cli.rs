@@ -911,6 +911,13 @@ fn print_show(detail: &ListingDetail, risk: &RiskAssessment, proj: &Projection) 
         money(proj.total_loan_interest),
     );
     println!("risk: {} ({}) · deferred capex ~{}", risk.score, risk.band.label(), money(risk.deferred_capex_eur));
+    if let Some(f) = &l.fairness {
+        let bm = f
+            .benchmark
+            .map(|b| format!(" · area median {}", money(b)))
+            .unwrap_or_default();
+        println!("fair price: {} ({}){}", f.band, f.confidence, bm);
+    }
     for f in &risk.flags {
         println!("  - {}", f.label);
     }
