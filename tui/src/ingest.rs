@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use reqwest::{Client, RequestBuilder};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::api::KontuClient;
 
@@ -205,7 +205,176 @@ pub async fn pull_oikotie(
     let codes = building_type_codes(property_types);
     let cards = fetch_cards(&http, &session, loc, &codes, shore, price_max, limit).await?;
     if cards.is_empty() {
-        return Ok(serde_json::json!({ "received": 0, "inserted": 0, "updated": 0, "skipped": 0 }));
+        return Ok(json!({ "received": 0, "inserted": 0, "updated": 0, "skipped": 0 }));
     }
     client.import_oikotie(&cards).await
+}
+
+const ETUOVI_SEARCH: &str = "https://www.etuovi.com/api/v3/announcements/search/listpage";
+const ETUOVI_SUGGEST: &str = "https://www.etuovi.com/api/v2/location/suggestions";
+
+/// Split requested types into Etuovi residential subtypes + a leisure (cottage) flag.
+fn etuovi_groups(types: &[String]) -> (Vec<&'static str>, bool) {
+    let mut residential = Vec::new();
+    let mut leisure = false;
+    for t in types {
+        let t = t.to_lowercase();
+        if t.contains("omakoti") {
+            residential.push("DETACHED_HOUSE");
+        } else if t.contains("pari") {
+            residential.push("SEMI_DETACHED_HOUSE");
+        } else if t.contains("rivi") {
+            residential.push("ROW_HOUSE");
+        } else if t.contains("erillis") {
+            residential.push("SEPARATE_HOUSE");
+        } else if t.contains("kerros") {
+            residential.push("APARTMENT_HOUSE");
+        } else if t.contains("mökki") || t.contains("mokki") || t.contains("loma") || t.contains("vapaa") {
+            leisure = true;
+        }
+    }
+    if residential.is_empty() && !leisure {
+        residential.push("DETACHED_HOUSE");
+    }
+    (residential, leisure)
+}
+
+async fn resolve_etuovi_location(http: &Client, name: &str) -> Result<Value> {
+    let resp: Value = http
+        .get(ETUOVI_SUGGEST)
+        .query(&[("q", name)])
+        .send()
+        .await?
+        .json()
+        .await?;
+    let arr = resp
+        .as_array()
+        .cloned()
+        .or_else(|| resp.get("results").and_then(|v| v.as_array()).cloned())
+        .unwrap_or_default();
+    let pick = arr
+        .iter()
+        .find(|x| {
+            x.get("type")
+                .and_then(Value::as_str)
+                .map(|t| t.contains("CITY"))
+                .unwrap_or(false)
+        })
+        .or_else(|| arr.first());
+    if let Some(p) = pick {
+        if let Some(code) = p.get("code").and_then(Value::as_str) {
+            let typ = p.get("type").and_then(Value::as_str).unwrap_or("CITY");
+            return Ok(json!([{ "code": code, "type": typ }]));
+        }
+    }
+    Ok(json!([]))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_etuovi(
+    http: &Client,
+    group: &str,
+    field: &str,
+    subtypes: &[&str],
+    loc_terms: &Value,
+    shore: bool,
+    price_max: Option<i64>,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let mut out: Vec<Value> = Vec::new();
+    let mut page = 1usize;
+    loop {
+        let mut body = json!({
+            "propertyType": group,
+            "locationSearchCriteria": { "unclassifiedLocationTerms": [], "classifiedLocationTerms": loc_terms },
+            "sellerType": "ALL",
+            "newBuildingSearchCriteria": "ALL_PROPERTIES",
+            "pagination": {
+                "firstResult": Value::Null,
+                "maxResults": 50,
+                "page": page,
+                "sortingOrder": { "property": "SEARCH_PRICE", "direction": "ASC" }
+            }
+        });
+        body[field] = json!(subtypes);
+        if let Some(pm) = price_max {
+            body["priceMax"] = json!(pm);
+        }
+        if shore {
+            body["hasShore"] = json!(true);
+        }
+        let resp: Value = http
+            .post(ETUOVI_SEARCH)
+            .json(&body)
+            .send()
+            .await
+            .context("etuovi search request")?
+            .json()
+            .await
+            .context("decoding etuovi response")?;
+        let total = resp.get("countOfAllResults").and_then(Value::as_i64).unwrap_or(0);
+        let batch = resp
+            .get("announcements")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let got = batch.len();
+        out.extend(batch);
+        page += 1;
+        if got < 50 || out.len() as i64 >= total || out.len() >= limit {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(800)).await;
+    }
+    out.truncate(limit);
+    Ok(out)
+}
+
+/// Pull Etuovi listings from the local IP and import them into the Worker.
+pub async fn pull_etuovi(
+    client: &KontuClient,
+    municipality: Option<&str>,
+    property_types: &[String],
+    shore: bool,
+    price_max: Option<i64>,
+    limit: usize,
+) -> Result<Value> {
+    use reqwest::header::{HeaderMap, HeaderValue};
+    let mut headers = HeaderMap::new();
+    headers.insert("X-PORTAL-IDENTIFIER", HeaderValue::from_static("ETUOVI"));
+    headers.insert(reqwest::header::ORIGIN, HeaderValue::from_static("https://www.etuovi.com"));
+    headers.insert(reqwest::header::REFERER, HeaderValue::from_static("https://www.etuovi.com/"));
+    let http = Client::builder()
+        .user_agent(UA)
+        .default_headers(headers)
+        .gzip(true)
+        .build()?;
+
+    let loc_terms = match municipality {
+        Some(m) => resolve_etuovi_location(&http, m).await.unwrap_or_else(|_| json!([])),
+        None => json!([]),
+    };
+
+    let (residential, leisure) = etuovi_groups(property_types);
+    let mut announcements: Vec<Value> = Vec::new();
+    if !residential.is_empty() {
+        announcements.extend(
+            fetch_etuovi(&http, "RESIDENTIAL", "residentialPropertyTypes", &residential, &loc_terms, shore, price_max, limit)
+                .await
+                .unwrap_or_default(),
+        );
+    }
+    if leisure && announcements.len() < limit {
+        let remaining = limit - announcements.len();
+        announcements.extend(
+            fetch_etuovi(&http, "LEISURE", "leisurePropertyTypes", &["COTTAGE"], &loc_terms, shore, price_max, remaining)
+                .await
+                .unwrap_or_default(),
+        );
+    }
+    announcements.truncate(limit);
+    if announcements.is_empty() {
+        return Ok(json!({ "received": 0, "inserted": 0, "updated": 0, "skipped": 0 }));
+    }
+    client.import_etuovi(&announcements).await
 }

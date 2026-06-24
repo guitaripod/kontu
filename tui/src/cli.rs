@@ -264,9 +264,12 @@ pub struct PullArgs {
     /// Only listings at or below this price (€)
     #[arg(long)]
     price_max: Option<i64>,
-    /// Maximum number of listings to pull
+    /// Maximum number of listings to pull (per portal)
     #[arg(long, default_value_t = 200)]
     limit: usize,
+    /// Which portal(s): oikotie | etuovi | both
+    #[arg(long, default_value = "both")]
+    portal: String,
 }
 
 #[derive(Args, Debug)]
@@ -547,27 +550,21 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
         }
         Command::Pull(a) => {
             let scope = a.municipality.clone().unwrap_or_else(|| "all of Finland".into());
-            eprintln!("pulling {scope} from oikotie (your IP)…");
-            let r = crate::ingest::pull_oikotie(
+            let r = pull_portals(
                 client,
+                &a.portal,
                 a.municipality.as_deref(),
                 &a.property_types,
                 a.shore,
                 a.price_max,
                 a.limit,
+                &scope,
             )
             .await?;
             if json {
                 emit(&r)?;
             } else {
-                let n = |k: &str| r.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
-                println!(
-                    "imported {} listings: {} new, {} updated, {} skipped",
-                    n("received"),
-                    n("inserted"),
-                    n("updated"),
-                    n("skipped")
-                );
+                print_import(&r);
             }
         }
         Command::Spec { action } => match action {
@@ -599,14 +596,15 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
             if a.pull {
                 let shore = matches!(spec.shore, Pref::Required | Pref::Plus);
                 let muni = (spec.municipalities.len() == 1).then(|| spec.municipalities[0].as_str());
-                eprintln!("refreshing listings for your spec…");
-                let _ = crate::ingest::pull_oikotie(
+                let _ = pull_portals(
                     client,
+                    "both",
                     muni,
                     &spec.property_types,
                     shore,
                     spec.price_max,
                     a.scan,
+                    "your spec",
                 )
                 .await;
             }
@@ -665,6 +663,52 @@ fn print_matches(top: &[crate::matching::Scored]) {
         );
     }
     println!("open one with: kontu open <id>");
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn pull_portals(
+    client: &KontuClient,
+    portal: &str,
+    muni: Option<&str>,
+    types: &[String],
+    shore: bool,
+    price_max: Option<i64>,
+    limit: usize,
+    scope: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let keys = ["received", "inserted", "updated", "skipped"];
+    let mut t = [0u64; 4];
+    let accumulate = |r: &serde_json::Value, t: &mut [u64; 4]| {
+        for (i, k) in keys.iter().enumerate() {
+            t[i] += r.get(*k).and_then(serde_json::Value::as_u64).unwrap_or(0);
+        }
+    };
+    if portal != "etuovi" {
+        eprintln!("pulling {scope} from oikotie…");
+        match crate::ingest::pull_oikotie(client, muni, types, shore, price_max, limit).await {
+            Ok(r) => accumulate(&r, &mut t),
+            Err(e) => eprintln!("  oikotie: {e}"),
+        }
+    }
+    if portal != "oikotie" {
+        eprintln!("pulling {scope} from etuovi…");
+        match crate::ingest::pull_etuovi(client, muni, types, shore, price_max, limit).await {
+            Ok(r) => accumulate(&r, &mut t),
+            Err(e) => eprintln!("  etuovi: {e}"),
+        }
+    }
+    Ok(serde_json::json!({ "received": t[0], "inserted": t[1], "updated": t[2], "skipped": t[3] }))
+}
+
+fn print_import(r: &serde_json::Value) {
+    let n = |k: &str| r.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
+    println!(
+        "imported {} listings: {} new, {} updated, {} skipped",
+        n("received"),
+        n("inserted"),
+        n("updated"),
+        n("skipped")
+    );
 }
 
 fn opt_i<T: ToString>(v: Option<T>) -> String {
