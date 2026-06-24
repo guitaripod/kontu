@@ -5,6 +5,7 @@ mod cli;
 mod config;
 mod cost;
 mod format;
+mod ingest;
 mod logging;
 mod models;
 #[cfg(test)]

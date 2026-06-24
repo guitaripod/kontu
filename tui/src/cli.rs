@@ -29,7 +29,8 @@ kontu cost 8002 --ltv 0.7 --euribor 0.03 --horizon 25 --json\n  \
 kontu risk 8002 --json\n  \
 kontu compare 8002 8007 8010 --json\n  \
 kontu score 8002 80 --deal-breaker\n  \
-kontu note 8002 \"Lakeside; book a kuntotutkimus.\"\n\n\
+kontu note 8002 \"Lakeside; book a kuntotutkimus.\"\n  \
+kontu pull Outokumpu          (ingest real listings from YOUR IP — the Worker's is blocked)\n\n\
 Connection: reads ~/.config/kontu/config.toml, overridable with --server/--token \
 or KONTU_SERVER_URL/KONTU_API_TOKEN."
 )]
@@ -93,6 +94,20 @@ pub enum Command {
     Open { id: i64 },
     /// Connectivity + contract self-check against the Worker
     Doctor,
+    /// Pull real Oikotie listings for a municipality (fetched from YOUR IP) into the Worker
+    Pull(PullArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct PullArgs {
+    /// Municipality to pull, e.g. Outokumpu
+    municipality: String,
+    /// Only listings at or below this price (€)
+    #[arg(long)]
+    price_max: Option<i64>,
+    /// Maximum number of listings to pull
+    #[arg(long, default_value_t = 200)]
+    limit: usize,
 }
 
 #[derive(Args, Debug)]
@@ -365,6 +380,22 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
                 println!(
                     "health={} cost_defaults={} listings={}",
                     healthy, defaults, listings
+                );
+            }
+        }
+        Command::Pull(a) => {
+            eprintln!("pulling {} from oikotie (your IP)…", a.municipality);
+            let r = crate::ingest::pull_oikotie(client, &a.municipality, a.price_max, a.limit).await?;
+            if json {
+                emit(&r)?;
+            } else {
+                let n = |k: &str| r.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
+                println!(
+                    "imported {} listings: {} new, {} updated, {} skipped",
+                    n("received"),
+                    n("inserted"),
+                    n("updated"),
+                    n("skipped")
                 );
             }
         }

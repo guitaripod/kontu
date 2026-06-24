@@ -89,6 +89,29 @@ impl KontuClient {
         self.get_json(&format!("/api/market/{municipality}"), &[]).await
     }
 
+    /// POST raw Oikotie cards to the Worker import endpoint, chunked to stay under
+    /// D1 per-invocation query limits. Returns aggregated counts.
+    pub async fn import_oikotie(&self, cards: &[serde_json::Value]) -> Result<serde_json::Value> {
+        let mut totals = [0u64; 4];
+        for chunk in cards.chunks(40) {
+            let resp = self
+                .http
+                .post(self.url("/api/import"))
+                .bearer_auth(&self.token)
+                .json(&serde_json::json!({ "source": "oikotie", "cards": chunk }))
+                .send()
+                .await
+                .context("POST /api/import")?;
+            let v: serde_json::Value = Self::parse(resp, "/api/import").await?;
+            for (i, key) in ["received", "inserted", "updated", "skipped"].iter().enumerate() {
+                totals[i] += v.get(*key).and_then(serde_json::Value::as_u64).unwrap_or(0);
+            }
+        }
+        Ok(serde_json::json!({
+            "received": totals[0], "inserted": totals[1], "updated": totals[2], "skipped": totals[3]
+        }))
+    }
+
     /// Fetch raw photo bytes from the Worker's R2-backed photo route.
     pub async fn photo_bytes(&self, key: &str) -> Result<Vec<u8>> {
         let resp = self

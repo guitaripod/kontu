@@ -147,6 +147,11 @@ function toInt(v: unknown): number | null {
   return n == null ? null : Math.round(n);
 }
 
+/** Treat a non-positive value as "no data" (e.g. Oikotie price-on-request = 0). */
+function positiveOrNull(n: number | null): number | null {
+  return n != null && n > 0 ? n : null;
+}
+
 function firstString(...vals: unknown[]): string | null {
   for (const v of vals) {
     if (typeof v === "string") {
@@ -323,6 +328,31 @@ export function fingerprintFor(row: NormalizedListing): string {
  * Map an Oikotie `/api/cards` card object into a NormalizedListing. The card
  * schema drifts and fields may be missing — every access is defensive.
  */
+/** Oikotie buildingData.buildingType integer code → Finnish type. Codes can drift. */
+function oikotieBuildingType(code: unknown): string | undefined {
+  switch (code) {
+    case 1:
+      return "kerrostalo";
+    case 2:
+      return "rivitalo";
+    case 3:
+      return "paritalo";
+    case 4:
+      return "omakotitalo";
+    case 5:
+      return "erillistalo";
+    case 6:
+      return "puutalo-osake";
+    case 8:
+      return "luhtitalo";
+    case 128:
+    case 256:
+      return "mökki";
+    default:
+      return undefined;
+  }
+}
+
 export function normalizeOikotieCard(card: unknown): NormalizedListing {
   const c = (card ?? {}) as Record<string, unknown>;
   const id = firstString(c["id"], c["cardId"], get(c, "card.id")) ?? "";
@@ -331,8 +361,15 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     (id ? `https://asunnot.oikotie.fi/myytavat-asunnot/${id}` : "https://asunnot.oikotie.fi/");
 
   const description = firstString(c["description"], c["shortDescription"], c["text"]) ?? "";
-  const rawType = firstString(c["buildingType"], get(c, "buildingData.type"), c["roomConfiguration"]);
-  const address = firstString(c["address"], get(c, "location.address"), c["streetAddress"]);
+  const buildingTypeName =
+    oikotieBuildingType(get(c, "buildingData.buildingType")) ??
+    firstString(c["buildingType"], get(c, "buildingData.type"));
+  const address = firstString(
+    c["address"],
+    get(c, "buildingData.address"),
+    get(c, "location.address"),
+    c["streetAddress"],
+  );
 
   const priceText = firstString(c["price"], get(c, "data.price"));
   const visualType = firstString(c["visualType"], c["cardType"]);
@@ -342,36 +379,37 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     portal: "oikotie",
     portal_listing_id: id,
     url,
-    property_type: normalizePropertyType(rawType ?? description),
+    property_type: normalizePropertyType(buildingTypeName ?? description),
     holding_form: normalizeHoldingForm(
       firstString(c["holdingType"], c["ownershipType"], get(c, "data.holdingType")),
     ),
     kiinteistotunnus: firstString(c["propertyIdentifier"], c["kiinteistotunnus"]),
     address,
     municipality: firstString(
+      get(c, "buildingData.city"),
       c["city"],
       get(c, "location.city"),
       c["municipality"],
       get(c, "location.municipality"),
     ),
     postal_code: firstString(c["postalCode"], get(c, "location.postalCode"), c["zipCode"]),
-    district: firstString(c["district"], get(c, "location.district")),
+    district: firstString(get(c, "buildingData.district"), c["district"], get(c, "location.district")),
     lat: toNumber(firstString(get(c, "coordinates.latitude"), get(c, "location.lat"), c["latitude"])),
     lon: toNumber(firstString(get(c, "coordinates.longitude"), get(c, "location.lng"), c["longitude"])),
-    price_eur: toInt(priceText),
+    price_eur: positiveOrNull(toInt(priceText)),
     debt_free_price_eur: toInt(firstString(c["debtFreePrice"], get(c, "data.debtFreePrice"))),
     debt_share_eur: toInt(firstString(c["debtShare"], get(c, "data.debt"))),
-    price_per_m2: toNumber(firstString(c["pricePerSquare"], c["pricePerM2"])),
+    price_per_m2: positiveOrNull(toNumber(firstString(c["pricePerSquare"], c["pricePerM2"]))),
     maintenance_charge_eur: toInt(c["maintenanceCharge"]),
     financing_charge_eur: toInt(c["financingCharge"]),
     ground_rent_eur_yr: toInt(c["groundRent"]),
     living_area_m2: toNumber(firstString(c["size"], c["area"], get(c, "data.area"))),
     total_area_m2: toNumber(c["totalArea"]),
-    plot_area_m2: toNumber(firstString(c["plotArea"], c["lotArea"])),
+    plot_area_m2: toNumber(firstString(c["sizeLot"], c["plotArea"], c["lotArea"])),
     room_count: toNumber(firstString(c["rooms"], c["roomCount"])),
     room_layout: firstString(c["roomConfiguration"], c["roomLayout"]),
-    floors: toNumber(c["floor"]),
-    year_built: toInt(firstString(c["buildYear"], c["yearOfBuilding"], get(c, "data.buildYear"))),
+    floors: toNumber(firstString(get(c, "buildingData.floorCount"), c["floor"])),
+    year_built: toInt(firstString(get(c, "buildingData.year"), c["buildYear"], c["yearOfBuilding"], get(c, "data.buildYear"))),
     occupancy_year: toInt(c["occupancyYear"]),
     condition_class: firstString(c["condition"], c["conditionClass"]),
     inspection_status: firstString(c["inspectionStatus"]),

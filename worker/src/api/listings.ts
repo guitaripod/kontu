@@ -28,10 +28,13 @@ import {
   setScore,
   setTags,
   updateSavedSearch,
+  upsertListing,
+  recordDiffEvents,
   type ListingsFilter,
 } from "../db";
 import { crawlTick } from "../crawl";
 import { enrichBatch } from "../geo";
+import { normalizeOikotieCard } from "../normalize";
 
 export const api = new Hono<{ Bindings: Env }>();
 
@@ -105,6 +108,32 @@ api.post("/sync", async (c) => {
   const tick = await crawlTick(c.env.DB, c.env.PHOTOS);
   const enriched = await enrichBatch(c.env.DB, 3);
   return c.json({ tick, enriched });
+});
+
+api.post("/import", async (c) => {
+  const body: { source?: string; cards?: unknown[] } = await c.req
+    .json<{ source?: string; cards?: unknown[] }>()
+    .catch(() => ({ cards: [] }));
+  const cards = Array.isArray(body.cards) ? body.cards : [];
+  let inserted = 0;
+  let updated = 0;
+  let skipped = 0;
+  for (const card of cards) {
+    try {
+      const n = normalizeOikotieCard(card);
+      if (!n.portal_listing_id) {
+        skipped++;
+        continue;
+      }
+      const res = await upsertListing(c.env.DB, n);
+      await recordDiffEvents(c.env.DB, res);
+      if (res.inserted) inserted++;
+      else updated++;
+    } catch {
+      skipped++;
+    }
+  }
+  return c.json({ source: body.source ?? "oikotie", received: cards.length, inserted, updated, skipped });
 });
 
 api.get("/cost-defaults", async (c) => {

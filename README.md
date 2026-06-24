@@ -99,13 +99,31 @@ kontu risk 8002 --json                       # 0–100 score + deferred-capex fl
 kontu compare 8002 8007 8010 --json          # price / €m² / modelled NPV / risk
 kontu score 8002 80 --deal-breaker           # personal weighted score
 kontu note 8002 "Lakeside; book a kuntotutkimus."
+kontu pull Outokumpu                         # ingest REAL listings (see below)
 kontu defaults | market Outokumpu | sync | doctor
 ```
 
-Commands: `list · show · cost · risk · compare · score · note · sync · defaults ·
-market · open · doctor`. Listings/history/photos come from the Worker; the cost and
+Commands: `list · show · cost · risk · compare · score · note · pull · sync ·
+defaults · market · open · doctor`. Listings/history/photos come from the Worker; the cost and
 risk models run locally in Rust. Connection comes from `~/.config/kontu/config.toml`
 (or `--server`/`--token`, or `KONTU_SERVER_URL`/`KONTU_API_TOKEN`).
+
+## Real listings (residential-IP ingest)
+
+The portals (Oikotie/Etuovi) bot-block Cloudflare's datacenter IP, so the Worker's
+own Cron crawl can't pull live listings. Your machine's residential IP **isn't**
+blocked — and the `kontu` CLI runs on your machine. So `kontu pull <municipality>`
+does the Oikotie token handshake + cards fetch locally, then pushes the raw cards to
+the Worker's token-guarded `/api/import` endpoint, which normalizes + dedupes + stores
+them (reusing the same logic as the crawler). Run it whenever you want fresh data:
+
+```sh
+kontu pull Outokumpu                 # all for-sale in the municipality
+kontu pull Joensuu --price-max 200000 --limit 100
+```
+
+After a pull, `kontu list`, the TUI, and `kontu open <id>` all work on real listings
+with real URLs.
 
 ## Deploy (requires your Cloudflare account)
 
