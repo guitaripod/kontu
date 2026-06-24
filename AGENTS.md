@@ -48,6 +48,20 @@ then run the workflow. If a spec was agreed earlier, reuse it instead of re-aski
 3. `kontu cost <id> --horizon 20 --json`, `kontu risk <id> --json`,
    `kontu score <id> 85 --deal-breaker`, `kontu note <id> "…"`, `kontu open <id>`.
 
+### C) Deep-verify a shortlist (the judgment layer kontu can't do)
+`pull --deep` already extracts the STRUCTURED facts (shore ownership, lake-vs-river,
+kuntoluokka, heating, renovation years). For the **top ~5–15** matches, fan out one
+sub-agent per listing to read its real detail page (`kontu show <id> --json` for the
+URL, then fetch it) and judge what a parser can't, returning a short evidence quote each:
+- **fibre**: installed vs only "saatavilla/tilattu" (available/ordered) vs none;
+- **shore**: cross-check `oma_ranta` against prose — is it a real home or a plot pitched
+  as "mahdollisuus rakentaa ympärivuotiseen" (build-it-yourself)? lake vs river vs pond;
+- **privacy**: "ei naapureita / haja-asutus" vs in-town vs on a main road;
+- **condition**: the renovation SCOPE (did the peruskorjaus cover pipes/roof/electrics?).
+Then rank by how many of the buyer's must-haves each CONFIRMS, and report each one's
+specific catch. This is the only part of house-hunting that genuinely benefits from
+multiple agents; everything else is deterministic and lives in the commands above.
+
 ## Commands
 - `spec` / `spec set <flags>` / `spec clear` — show/edit the saved house-hunting spec.
   Read with `spec --json`. Flags: `--anywhere | --area <m>` (repeat), `--type <t>` (repeat),
