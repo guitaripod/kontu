@@ -52,8 +52,9 @@ then run the workflow. If a spec was agreed earlier, reuse it instead of re-aski
 - `spec` / `spec set <flags>` / `spec clear` — show/edit the saved house-hunting spec.
   Read with `spec --json`. Flags: `--anywhere | --area <m>` (repeat), `--type <t>` (repeat),
   `--price-max N --price-min N --min-plot-m2 N --min-m2 N --min-rooms N --year-min N`,
-  `--shore|--ev|--fiber|--privacy|--winterized any|plus|required|avoid` (`--winterized
-  required` hard-drops summer-only mökki), `--owned-plot --require-infra
+  `--shore|--ev|--fiber|--privacy|--winterized|--condition any|plus|required|avoid`
+  (`--winterized required` hard-drops summer-only mökki; `--condition required` drops
+  clearly renovation-needed / unrenovated valesokkeli-era ~1960–85), `--owned-plot --require-infra
   --minimize-tco --max-dom N --horizon N --exclude <kw> --note "…"`. The three bool flags
   each have a `--no-…` form (`--no-owned-plot` etc.) to clear them without `spec clear`.
 - `match [--pull] [--limit N] [--scan N]` — rank listings by fit to the spec, best first

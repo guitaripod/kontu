@@ -34,6 +34,7 @@ struct Signals {
     fiber: f64,
     infra: f64,
     winter: f64,
+    condition: f64,
 }
 
 fn has(text: &str, needles: &[&str]) -> bool {
@@ -181,6 +182,34 @@ fn winter_signal(l: &Listing, desc: &str) -> f64 {
     0.4
 }
 
+/// Structural condition: 1.0 = move-in/renovated, ~0.2 = needs major work.
+/// Explicit "good condition" / "needs renovation" text wins; otherwise build year
+/// drives it (the ~1960–85 valesokkeli/putki era is penalized; newer is better).
+fn condition_signal(l: &Listing, desc: &str) -> f64 {
+    if has(desc, &["remontin tarp", "remontoitav", "peruskorjauksen tarp", "peruskorjattava", "purkukunt", "purettav", "huonokuntoi", "korjausvel", "kosteusvaur", "homevaur", "asumiskelvot"]) {
+        return 0.2;
+    }
+    let mut base: f64 = if has(desc, &["muuttovalmi", "hyväkuntoi", "erinomaisessa kun", "erinomainen kun", "täysin remontoi", "remontoitu", "peruskorjattu", "uudisveroi", "hyvin pidet"]) {
+        0.95
+    } else {
+        match l.year_built {
+            Some(y) if y >= 2010 => 0.9,
+            Some(y) if y >= 1995 => 0.8,
+            Some(y) if y >= 1986 => 0.65,
+            Some(y) if y >= 1960 => 0.45,
+            Some(_) => 0.55,
+            None => 0.55,
+        }
+    };
+    if l.condition_class.as_deref().map(|c| c.contains("hyvä") || c.contains("erinomai")).unwrap_or(false) {
+        base = base.max(0.85);
+    }
+    if l.condition_class.as_deref().map(|c| c.contains("huono") || c.contains("välttäv")).unwrap_or(false) {
+        base = base.min(0.35);
+    }
+    base
+}
+
 fn signals(l: &Listing) -> Signals {
     let desc = l
         .description
@@ -194,6 +223,7 @@ fn signals(l: &Listing) -> Signals {
         fiber: fiber_signal(&desc, l),
         infra: infra_signal(l, &desc),
         winter: winter_signal(l, &desc),
+        condition: condition_signal(l, &desc),
     }
 }
 
@@ -293,12 +323,17 @@ fn passes_hard(spec: &Spec, l: &Listing, s: &Signals) -> bool {
         || pref_excludes(spec.fiber, s.fiber)
         || pref_excludes(spec.privacy, s.privacy)
         || pref_excludes(spec.winterized, s.winter)
+        || pref_excludes(spec.condition, s.condition)
     {
         return false;
     }
     // Unlike the free-text soft signals, a clearly summer-only listing is a real
     // disqualifier for a year-round home, so Required hard-drops it.
     if matches!(spec.winterized, Pref::Required) && s.winter < 0.3 {
+        return false;
+    }
+    // A clearly renovation-needed / renovation-era house defeats "good condition".
+    if matches!(spec.condition, Pref::Required) && s.condition < 0.5 {
         return false;
     }
     if spec.require_infra && s.infra < 0.25 {
@@ -348,8 +383,9 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
     let we = pref_weight(spec.ev_charging, w.ev);
     let wf = pref_weight(spec.fiber, w.fiber);
     let ww = pref_weight(spec.winterized, w.winter);
+    let wc = pref_weight(spec.condition, w.condition);
     let wi = if spec.require_infra { w.infra * 1.5 } else { w.infra };
-    let total_w = (wtco + ws + wp + we + wf + ww + wi + w.risk).max(1e-9);
+    let total_w = (wtco + ws + wp + we + wf + ww + wc + wi + w.risk).max(1e-9);
 
     let mut scored: Vec<Scored> = candidates
         .into_iter()
@@ -366,6 +402,7 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
                 + we * pref_signal(spec.ev_charging, c.signals.ev)
                 + wf * pref_signal(spec.fiber, c.signals.fiber)
                 + ww * pref_signal(spec.winterized, c.signals.winter)
+                + wc * pref_signal(spec.condition, c.signals.condition)
                 + wi * c.signals.infra
                 + w.risk * risk_score)
                 / total_w
@@ -409,6 +446,11 @@ fn reasons(c: &Candidate, tco: f64) -> Vec<String> {
         r.push("year-round".into());
     } else if c.signals.winter <= 0.2 {
         r.push("summer-only?".into());
+    }
+    if c.signals.condition >= 0.9 {
+        r.push("good condition".into());
+    } else if c.signals.condition <= 0.3 {
+        r.push("needs work?".into());
     }
     if c.signals.fiber >= 1.0 {
         r.push("fibre".into());
@@ -464,5 +506,23 @@ mod tests {
         assert!(ws(&summer) <= 0.2, "kesämökki + kantovesi reads summer-only");
         assert!(ws(&year_round) >= 0.9, "talviasuttava reads year-round");
         assert!(ws(&house) >= 0.9, "a detached house is year-round by construction");
+    }
+
+    #[test]
+    fn condition_signal_reads_text_and_era() {
+        let cs = |l: &Listing| condition_signal(l, &l.description.clone().unwrap_or_default().to_lowercase());
+        let fixer = Listing {
+            description: Some("Vanha talo, remontin tarpeessa, peruskorjaus edessä.".into()),
+            ..Default::default()
+        };
+        let move_in = Listing {
+            description: Some("Muuttovalmis, täysin remontoitu, hyväkuntoinen.".into()),
+            ..Default::default()
+        };
+        let valesokkeli_era = Listing { year_built: Some(1975), ..Default::default() };
+        let modern = Listing { year_built: Some(2015), ..Default::default() };
+        assert!(cs(&fixer) <= 0.3, "remontin tarpeessa reads needs-work");
+        assert!(cs(&move_in) >= 0.9, "muuttovalmis/remontoitu reads good condition");
+        assert!(cs(&valesokkeli_era) < cs(&modern), "1975 era is riskier than 2015");
     }
 }
