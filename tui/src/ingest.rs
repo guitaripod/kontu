@@ -44,13 +44,15 @@ fn building_type_codes(types: &[String]) -> Vec<i64> {
             } else if t.contains("rivi") {
                 Some(2)
             } else if t.contains("pari") {
-                Some(8)
+                Some(64)
             } else if t.contains("kerros") {
                 Some(1)
             } else if t.contains("erillis") {
                 Some(32)
-            } else if t.contains("mökki") || t.contains("mokki") || t.contains("loma") {
+            } else if t.contains("luhti") {
                 Some(256)
+            } else if t.contains("mökki") || t.contains("mokki") || t.contains("loma") || t.contains("vapaa") {
+                Some(8)
             } else {
                 None
             }
@@ -129,6 +131,7 @@ async fn fetch_cards(
     s: &Session,
     loc: Option<(i64, i64, String)>,
     building_types: &[i64],
+    shore: bool,
     price_max: Option<i64>,
     limit: usize,
 ) -> Result<Vec<Value>> {
@@ -146,6 +149,10 @@ async fn fetch_cards(
         }
         for bt in building_types {
             q.push(("buildingType[]".into(), bt.to_string()));
+        }
+        if shore {
+            q.push(("shoreOwnershipType[]".into(), "2".into()));
+            q.push(("shoreOwnershipType[]".into(), "4".into()));
         }
         if let Some(pm) = price_max {
             q.push(("price[max]".into(), pm.to_string()));
@@ -185,6 +192,7 @@ pub async fn pull_oikotie(
     client: &KontuClient,
     municipality: Option<&str>,
     property_types: &[String],
+    shore: bool,
     price_max: Option<i64>,
     limit: usize,
 ) -> Result<Value> {
@@ -195,7 +203,7 @@ pub async fn pull_oikotie(
         None => None,
     };
     let codes = building_type_codes(property_types);
-    let cards = fetch_cards(&http, &session, loc, &codes, price_max, limit).await?;
+    let cards = fetch_cards(&http, &session, loc, &codes, shore, price_max, limit).await?;
     if cards.is_empty() {
         return Ok(serde_json::json!({ "received": 0, "inserted": 0, "updated": 0, "skipped": 0 }));
     }

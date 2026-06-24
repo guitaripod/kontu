@@ -7,6 +7,7 @@ mod cost;
 mod format;
 mod ingest;
 mod logging;
+mod matching;
 mod models;
 #[cfg(test)]
 mod render_smoke;

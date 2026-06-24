@@ -104,6 +104,21 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<SpecAction>,
     },
+    /// Find and rank listings by fit to your saved spec (best first)
+    Match(MatchArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct MatchArgs {
+    /// Pull fresh listings for your spec from your IP before matching
+    #[arg(long)]
+    pull: bool,
+    /// How many top matches to show
+    #[arg(long, default_value_t = 15)]
+    limit: usize,
+    /// Cap on listings scanned/scored
+    #[arg(long, default_value_t = 800)]
+    scan: usize,
 }
 
 #[derive(Subcommand, Debug)]
@@ -243,6 +258,9 @@ pub struct PullArgs {
     /// Property type to include (repeatable): omakotitalo, mökki, rivitalo, paritalo, kerrostalo, erillistalo
     #[arg(long = "type")]
     property_types: Vec<String>,
+    /// Only lakehouses (own shore or shore right)
+    #[arg(long)]
+    shore: bool,
     /// Only listings at or below this price (€)
     #[arg(long)]
     price_max: Option<i64>,
@@ -534,6 +552,7 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
                 client,
                 a.municipality.as_deref(),
                 &a.property_types,
+                a.shore,
                 a.price_max,
                 a.limit,
             )
@@ -575,8 +594,77 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
                 }
             }
         },
+        Command::Match(a) => {
+            let spec = Spec::load()?;
+            if a.pull {
+                let shore = matches!(spec.shore, Pref::Required | Pref::Plus);
+                let muni = (spec.municipalities.len() == 1).then(|| spec.municipalities[0].as_str());
+                eprintln!("refreshing listings for your spec…");
+                let _ = crate::ingest::pull_oikotie(
+                    client,
+                    muni,
+                    &spec.property_types,
+                    shore,
+                    spec.price_max,
+                    a.scan,
+                )
+                .await;
+            }
+            let defaults = client.cost_defaults().await.unwrap_or_default();
+            let filter = spec_to_filter(&spec);
+            let page = client
+                .list_listings(&filter, SortColumn::Price, false, a.scan as u32, 0)
+                .await?;
+            let ranked = crate::matching::rank(&spec, page.listings, &defaults);
+            let top: Vec<_> = ranked.into_iter().take(a.limit).collect();
+            if json {
+                emit(&top)?;
+            } else {
+                print_matches(&top);
+            }
+        }
     }
     Ok(())
+}
+
+fn spec_to_filter(spec: &Spec) -> FilterState {
+    FilterState {
+        municipality: (spec.municipalities.len() == 1).then(|| spec.municipalities[0].clone()),
+        property_type: (spec.property_types.len() == 1).then(|| spec.property_types[0].clone()),
+        price_min: spec.price_min,
+        price_max: spec.price_max,
+        m2_min: spec.min_m2,
+        rooms_min: spec.min_rooms,
+        year_min: spec.year_min,
+        max_days_on_market: spec.max_dom,
+        exclude_keywords: spec.exclude.clone(),
+        ..Default::default()
+    }
+}
+
+fn print_matches(top: &[crate::matching::Scored]) {
+    if top.is_empty() {
+        println!("no matches — try `kontu match --pull`, widen the spec, or check `kontu spec`.");
+        return;
+    }
+    println!(
+        "{:>6} {:>4} {:<22} {:<13} {:>9} {:>4} {:>8}  {}",
+        "ID", "FIT", "PLACE", "WHERE", "PRICE", "RSK", "€/MO", "WHY"
+    );
+    for m in top {
+        println!(
+            "{:>6} {:>4.0} {:<22} {:<13} {:>9} {:>4} {:>8}  {}",
+            m.id,
+            m.score,
+            trunc(&m.title, 22),
+            trunc(m.municipality.as_deref().unwrap_or("?"), 13),
+            money_opt(m.price_eur),
+            m.risk,
+            money(m.monthly),
+            m.reasons.join(", "),
+        );
+    }
+    println!("open one with: kontu open <id>");
 }
 
 fn opt_i<T: ToString>(v: Option<T>) -> String {
