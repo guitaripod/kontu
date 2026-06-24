@@ -265,6 +265,9 @@ pub struct SpecSetArgs {
     no_minimize_tco: bool,
     #[arg(long = "max-dom")]
     max_dom: Option<i64>,
+    /// Drop houses with a buyer-risk score above this (0–100) — "sound condition"
+    #[arg(long = "max-risk")]
+    max_risk: Option<u32>,
     /// Cost-model horizon in years
     #[arg(long)]
     horizon: Option<u32>,
@@ -348,6 +351,9 @@ impl SpecSetArgs {
         }
         if self.max_dom.is_some() {
             s.max_dom = self.max_dom;
+        }
+        if self.max_risk.is_some() {
+            s.max_risk = self.max_risk;
         }
         if let Some(v) = self.horizon {
             s.horizon_years = v;
@@ -1083,12 +1089,13 @@ fn print_spec(s: &Spec) {
         println!("flags      {}", flags.join(", "));
     }
     println!(
-        "minimums   plot {} m² · area {} m² · year {} · rooms {} · dom ≤ {}",
+        "limits     plot ≥ {} m² · area ≥ {} m² · year ≥ {} · rooms ≥ {} · dom ≤ {} · risk ≤ {}",
         opt_i(s.min_plot_m2.map(|v| v as i64)),
         opt_i(s.min_m2.map(|v| v as i64)),
         opt_i(s.year_min),
         opt_i(s.min_rooms),
         opt_i(s.max_dom),
+        opt_i(s.max_risk.map(|v| v as i64)),
     );
     println!("horizon    {} yr", s.horizon_years);
     if !s.exclude.is_empty() {

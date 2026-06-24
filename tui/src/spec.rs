@@ -104,6 +104,9 @@ pub struct Spec {
     /// Drive the ranking toward the lowest total cost of ownership.
     pub minimize_tco: bool,
     pub max_dom: Option<i64>,
+    /// Hard cap on the computed buyer-risk score (0–100): drops houses with more
+    /// deferred-capex/era risk than this. The benchmark of "sound condition".
+    pub max_risk: Option<u32>,
     /// Cost-model horizon in years.
     pub horizon_years: u32,
     /// Exclude listings whose text matches any of these keywords.
@@ -136,6 +139,7 @@ impl Default for Spec {
             alert_min_fit: 55.0,
             minimize_tco: false,
             max_dom: None,
+            max_risk: None,
             horizon_years: 20,
             exclude: Vec::new(),
             notes: String::new(),

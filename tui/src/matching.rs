@@ -372,6 +372,15 @@ fn passes_hard(spec: &Spec, l: &Listing, s: &Signals) -> bool {
     if matches!(spec.condition, Pref::Required) && s.condition < 0.5 {
         return false;
     }
+    // `shore = required` means OWN lake shore: drop shore-right / no-shore / river
+    // (the enriched structured fields make this reliable).
+    if matches!(spec.shore, Pref::Required) {
+        let own_lake = l.shore.as_deref().map(|s| s.contains("oma_ranta")).unwrap_or(false)
+            && l.water_body.as_deref().map(|w| !w.contains("joki")).unwrap_or(true);
+        if !own_lake {
+            return false;
+        }
+    }
     if spec.require_infra && s.infra < 0.25 {
         return false;
     }
@@ -396,6 +405,11 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
             continue;
         }
         let assessment = risk::assess(&l.to_risk_input(s.shore >= PRESENT), 2026);
+        if let Some(max) = spec.max_risk
+            && assessment.score > max
+        {
+            continue;
+        }
         let mut cs = CostState::from_defaults(defaults);
         cs.apply_listing(&l, &assessment, defaults);
         cs.horizon = spec.horizon_years;
