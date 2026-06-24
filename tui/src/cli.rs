@@ -94,6 +94,8 @@ pub enum Command {
     Open { id: i64 },
     /// Connectivity + contract self-check against the Worker
     Doctor,
+    /// Print the agent playbook (how an LLM should drive this CLI)
+    Guide,
     /// Pull real Oikotie listings for a municipality (fetched from YOUR IP) into the Worker
     Pull(PullArgs),
 }
@@ -382,6 +384,9 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
                     healthy, defaults, listings
                 );
             }
+        }
+        Command::Guide => {
+            print!("{}", include_str!("../../AGENTS.md"));
         }
         Command::Pull(a) => {
             eprintln!("pulling {} from oikotie (your IP)…", a.municipality);
