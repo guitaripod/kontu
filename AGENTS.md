@@ -57,9 +57,10 @@ then run the workflow. If a spec was agreed earlier, reuse it instead of re-aski
 - `match [--pull] [--limit N] [--scan N]` — rank listings by fit to the spec, best first
   (`score` 0–100; TCO-dominant + shore/privacy/ev/fiber/infra signals + risk; `reasons[]`
   explains each). `--pull` refreshes listings for the spec from your IP first.
-- `pull [municipality] [--type <t>…] [--shore] [--price-max N] [--limit N]` — ingest REAL
-  Oikotie listings from this machine's IP into the Worker. Omit the municipality for ALL
-  of Finland (use filters). `--shore` = lakehouses only. Idempotent (upserts).
+- `pull [municipality] [--type <t>…] [--shore] [--price-max N] [--limit N] [--portal oikotie|etuovi|both]`
+  — ingest REAL listings from this machine's IP into the Worker (Oikotie + Etuovi by
+  default). Omit the municipality for ALL of Finland (use filters). `--shore` = lakehouses
+  only. Idempotent (upserts).
 - `list [filters] [--sort C] [--desc] [--limit N] [--json]` — exact-parameter search.
   Filters: `--municipality --type <omakotitalo|paritalo|rivitalo|kerrostalo|mökki>
   --holding <kiinteisto|asunto_osake> --price-min --price-max --m2-min --rooms-min
@@ -87,7 +88,10 @@ then run the workflow. If a spec was agreed earlier, reuse it instead of re-aski
 - listing (`list`/`show`): `id, address, municipality, postal_code, price_eur,
   price_per_m2, living_area_m2, plot_area_m2, room_count, room_layout, year_built,
   property_type, holding_form, shore, heating_type, energy_class, plot_ownership,
-  days_on_market, status, url`. `price_eur` is null = price-on-request.
+  days_on_market, status, url, description`, plus `fairness:{band,ratio,benchmark,
+  confidence}` (band: underpriced|below_market|fair|above_market|overpriced|unknown — vs
+  the MML area median; `unknown` for small municipalities with suppressed data).
+  `price_eur` is null = price-on-request.
 - `cost`: `npv_cost, equivalent_monthly, one_time{down_payment, transfer_tax,
   lainhuuto, kaupanvahvistus, kiinnitys, inspection, moving}, total_loan_interest,
   terminal_equity, loan_principal` (+ `years[]` with `--schedule`).
