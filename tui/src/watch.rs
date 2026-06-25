@@ -50,6 +50,7 @@ pub fn save_seen(seen: &BTreeSet<i64>) -> Result<()> {
 
 /// Render a ranked match as a Telegram HTML alert. The bare URL on its own line
 /// makes Telegram render the listing's link preview (cover photo) inline.
+#[allow(dead_code)]
 pub fn format_alert(m: &Scored) -> String {
     let price = m
         .price_eur
@@ -61,9 +62,13 @@ pub fn format_alert(m: &Scored) -> String {
     } else {
         format!("\n<i>{}</i>", escape(&m.reasons.join(", ")))
     };
+    let header = if m.near_miss {
+        format!("🔶 <b>{}</b> · near-miss", escape(&m.title))
+    } else {
+        format!("🏠 <b>{}</b>", escape(&m.title))
+    };
     format!(
-        "🏠 <b>{title}</b>\n📍 {place}\n💶 {price} · ~{living} €/mo to run · risk {risk} · fit {fit:.0}{reasons}\n{url}",
-        title = escape(&m.title),
+        "{header}\n📍 {place}\n💶 {price} · ~{living} €/mo to run · risk {risk} · fit {fit:.0}{reasons}\n{url}",
         place = escape(place),
         living = m.monthly_living.round() as i64,
         risk = m.risk,
@@ -72,6 +77,7 @@ pub fn format_alert(m: &Scored) -> String {
     )
 }
 
+#[allow(dead_code)]
 fn thousands(n: i64) -> String {
     let s = n.abs().to_string();
     let mut out = String::new();
@@ -188,6 +194,8 @@ mod tests {
             monthly: 700.0,
             monthly_living: 420.0,
             risk: 10,
+            pinned: false,
+            near_miss: false,
             reasons: vec!["lakeshore".into()],
         };
         let out = format_alert(&m);

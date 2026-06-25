@@ -95,11 +95,17 @@ pub struct Spec {
     /// Good structural condition (move-in vs renovation-needed). `Required`
     /// hard-drops listings that clearly need major work / are renovation-era.
     pub condition: Pref,
+    /// Single-storey only: hard-drop listings that clearly have more than one
+    /// living floor (kaksikerroksinen, yläkerta/alakerta, kahteen tasoon …).
+    pub single_floor: bool,
     /// Buy outright with no mortgage (LTV 0): the cost model charges no loan
     /// interest, only running costs and the capital's opportunity cost.
     pub cash: bool,
-    /// Telegram watch only alerts on matches scoring at least this fit (0–100).
-    /// Set near your benchmark houses' fit so only comparably good homes ping.
+    /// Optional EXTRA fit floor on Telegram alerts, layered on top of the quality
+    /// gate (0 = the gate alone decides). The gate (the hard criteria in
+    /// `passes_hard` plus the `max_risk` cap) is what makes a home relevant; fit is
+    /// relative to the candidate pool, so it only ORDERS survivors and must never
+    /// gate membership — "if it doesn't pass the gate, it's irrelevant".
     pub alert_min_fit: f64,
     /// Drive the ranking toward the lowest total cost of ownership.
     pub minimize_tco: bool,
@@ -107,6 +113,17 @@ pub struct Spec {
     /// Hard cap on the computed buyer-risk score (0–100): drops houses with more
     /// deferred-capex/era risk than this. The benchmark of "sound condition".
     pub max_risk: Option<u32>,
+    /// Listings pinned into your options regardless of the gate — homes you have
+    /// personally vetted and want kept visible even if a hard criterion (e.g.
+    /// `max_risk`) would otherwise drop them. `match` includes and marks them; the
+    /// watch never *alerts* on a pin (it's already known, not a new discovery).
+    pub pinned: Vec<i64>,
+    /// Risk ceiling for the *near-miss* band: homes that pass every hard criterion
+    /// but score in `(max_risk, near_miss_risk]` — sound, year-round, on-spec homes
+    /// that miss the gate only on age-risk. Surfaced (and alerted) but marked, so
+    /// the tight gate stays tight yet good older homes are never silently dropped.
+    /// `None` disables the band.
+    pub near_miss_risk: Option<u32>,
     /// Cost-model horizon in years.
     pub horizon_years: u32,
     /// Exclude listings whose text matches any of these keywords.
@@ -135,11 +152,14 @@ impl Default for Spec {
             privacy: Pref::Any,
             winterized: Pref::Any,
             condition: Pref::Any,
+            single_floor: false,
             cash: false,
-            alert_min_fit: 55.0,
+            alert_min_fit: 0.0,
             minimize_tco: false,
             max_dom: None,
             max_risk: None,
+            pinned: Vec::new(),
+            near_miss_risk: None,
             horizon_years: 20,
             exclude: Vec::new(),
             notes: String::new(),

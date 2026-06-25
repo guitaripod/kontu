@@ -183,6 +183,19 @@ impl KontuClient {
         let _: serde_json::Value = Self::parse(resp, "set_score").await?;
         Ok(())
     }
+
+    /// Publish (or refresh) a listing's public web page from a computed snapshot.
+    pub async fn publish_page(&self, id: i64, tier: &str, payload: serde_json::Value) -> Result<()> {
+        let resp = self
+            .http
+            .post(self.url("/api/publish"))
+            .bearer_auth(&self.token)
+            .json(&json!({ "id": id, "tier": tier, "payload": payload }))
+            .send()
+            .await?;
+        let _: serde_json::Value = Self::parse(resp, "publish_page").await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

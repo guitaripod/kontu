@@ -96,6 +96,47 @@ async fn fetch_detail(http: &Client, url: &str) -> Option<Value> {
     Some(parse_detail(&html))
 }
 
+/// Fetch a listing's full HD gallery image URLs from its Oikotie detail page —
+/// the embedded `"images":[{url}]` JSON points at the watermarked thumbor CDN,
+/// which is directly hotlinkable. Best-effort: empty on any error or non-Oikotie.
+pub async fn fetch_gallery(url: &str) -> Vec<String> {
+    let Ok(http) = Client::builder()
+        .user_agent(UA)
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    else {
+        return Vec::new();
+    };
+    let Ok(resp) = http
+        .get(url)
+        .header("Referer", "https://asunnot.oikotie.fi/")
+        .send()
+        .await
+    else {
+        return Vec::new();
+    };
+    let Ok(html) = resp.text().await else {
+        return Vec::new();
+    };
+    let prefix = "\"url\":\"";
+    let host = "https://cdn.asunnot.oikotie.fi/";
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = html.as_str();
+    while let Some(p) = rest.find(prefix) {
+        let after = &rest[p + prefix.len()..];
+        let Some(q) = after.find('"') else { break };
+        let u = &after[..q];
+        if u.starts_with(host) && u.contains("mediabank") && !out.iter().any(|x| x == u) {
+            out.push(u.to_string());
+        }
+        rest = &after[q..];
+        if out.len() >= 30 {
+            break;
+        }
+    }
+    out
+}
+
 /// The detail-page URL for an Oikotie card. `/api/cards` usually carries `url`, but
 /// fall back to `links.self` and then the canonical id-derived path so enrichment
 /// never silently no-ops if a card omits the field.

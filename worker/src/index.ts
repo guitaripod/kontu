@@ -3,7 +3,8 @@ import { api } from "./api/listings";
 import { crawlTick } from "./crawl";
 import { enrichBatch } from "./geo";
 import { marketIsStale, refreshMarketStats } from "./fairprice";
-import { getPhotoSourceByKey } from "./db";
+import { getPhotoSourceByKey, getPublishedPage, listPublishedPages } from "./db";
+import { renderIndexPage, renderListingPage, type PublishedPayload } from "./page";
 
 export interface Env {
   DB: D1Database;
@@ -28,6 +29,52 @@ app.get("/", (c) =>
 app.get("/health", (c) =>
   c.json({ ok: true, service: "kontu", ts: new Date().toISOString() }),
 );
+
+const FAVICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="0" y="0" width="32" height="32" rx="6" fill="#14180f"/><path d="M16 4 L28 14 L25 14 L25 27 L7 27 L7 14 L4 14 Z" fill="#3fae6f"/><path d="M10 18 L14.5 22.5 L23 12.5" fill="none" stroke="#efe7d2" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+app.get("/favicon.svg", (c) =>
+  c.body(FAVICON, 200, { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=604800" }),
+);
+app.get("/favicon.ico", (c) => c.redirect("/favicon.svg", 301));
+
+app.get("/kontu", async (c) => {
+  const rows = await listPublishedPages(c.env.DB);
+  const items: PublishedPayload[] = [];
+  for (const r of rows) {
+    try {
+      items.push(JSON.parse(r) as PublishedPayload);
+    } catch {
+      /* skip a corrupt row */
+    }
+  }
+  const origin = new URL(c.req.url).origin;
+  return c.html(renderIndexPage(items, origin), 200, {
+    "Cache-Control": "public, max-age=300",
+    "X-Robots-Tag": "noindex, nofollow",
+  });
+});
+
+app.get("/kontu/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) return c.text("not found", 404);
+  const payload = await getPublishedPage(c.env.DB, id);
+  if (!payload) return c.text("not found", 404);
+  let data: PublishedPayload;
+  try {
+    data = JSON.parse(payload) as PublishedPayload;
+  } catch {
+    return c.text("page unavailable", 500);
+  }
+  const origin = new URL(c.req.url).origin;
+  return c.html(renderListingPage(data, origin), 200, {
+    "Cache-Control": "public, max-age=600",
+    "X-Robots-Tag": "noindex, nofollow",
+  });
+});
+
+app.get("/h", (c) => c.redirect("/kontu", 301));
+app.get("/h/:id", (c) => c.redirect(`/kontu/${c.req.param("id")}`, 301));
 
 app.use("/api/*", async (c, next) => {
   const token = c.req.header("Authorization")?.replace(/^Bearer\s+/i, "");

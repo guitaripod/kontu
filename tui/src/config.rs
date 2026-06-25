@@ -19,6 +19,14 @@ pub struct Config {
     pub telegram_token: String,
     /// Telegram chat id alerts are delivered to (auto-detected on first message).
     pub telegram_chat_id: String,
+    /// Public base URL of the kontu web app (where validated listings are
+    /// published); Telegram alerts link to `<webapp_url>/kontu/<id>`.
+    #[serde(default = "default_webapp_url")]
+    pub webapp_url: String,
+}
+
+fn default_webapp_url() -> String {
+    "https://kontu.guitaripod.workers.dev".to_string()
 }
 
 impl Default for Config {
@@ -29,6 +37,7 @@ impl Default for Config {
             theme: "default".to_string(),
             telegram_token: String::new(),
             telegram_chat_id: String::new(),
+            webapp_url: "https://kontu.guitaripod.workers.dev".to_string(),
         }
     }
 }

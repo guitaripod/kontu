@@ -136,7 +136,8 @@ pub struct WatchRunArgs {
     /// Skip the fresh pull and rank already-ingested listings
     #[arg(long)]
     no_pull: bool,
-    /// Override the spec's alert fit threshold (0–100) for this run
+    /// Optional extra fit floor for this run (0–100); the quality gate already
+    /// decides which homes are relevant, so this only narrows alerts further
     #[arg(long)]
     min_fit: Option<f64>,
     /// Listings scanned per area before ranking
@@ -251,6 +252,12 @@ pub struct SpecSetArgs {
     /// Good condition / move-in (not a renovation project): any|plus|required|avoid
     #[arg(long)]
     condition: Option<String>,
+    /// Single-storey only (drop clearly multi-floor houses)
+    #[arg(long = "single-floor", overrides_with = "no_single_floor")]
+    single_floor: bool,
+    /// Allow multi-floor houses
+    #[arg(long = "no-single-floor")]
+    no_single_floor: bool,
     /// Buy outright with no mortgage (cost model uses LTV 0, no loan interest)
     #[arg(long = "cash", overrides_with = "no_cash")]
     cash: bool,
@@ -268,10 +275,20 @@ pub struct SpecSetArgs {
     /// Drop houses with a buyer-risk score above this (0–100) — "sound condition"
     #[arg(long = "max-risk")]
     max_risk: Option<u32>,
+    /// Risk ceiling for the near-miss band: sound on-spec homes scoring between
+    /// max-risk and this are surfaced + alerted (marked), not dropped; 0 disables
+    #[arg(long = "near-miss-risk")]
+    near_miss_risk: Option<u32>,
+    /// Pin a listing into your options regardless of the gate (repeatable)
+    #[arg(long = "pin")]
+    pin: Vec<i64>,
+    /// Remove a pinned listing (repeatable)
+    #[arg(long = "unpin")]
+    unpin: Vec<i64>,
     /// Cost-model horizon in years
     #[arg(long)]
     horizon: Option<u32>,
-    /// Telegram alert fit threshold (0–100); only homes scoring ≥ this ping you
+    /// Optional extra fit floor on alerts (0–100; 0 = the quality gate alone decides)
     #[arg(long = "alert-min-fit")]
     alert_min_fit: Option<f64>,
     /// Exclude listings matching this keyword (repeatable)
@@ -339,6 +356,11 @@ impl SpecSetArgs {
         if let Some(p) = &self.condition {
             s.condition = Pref::parse(p);
         }
+        if self.single_floor {
+            s.single_floor = true;
+        } else if self.no_single_floor {
+            s.single_floor = false;
+        }
         if self.cash {
             s.cash = true;
         } else if self.no_cash {
@@ -354,6 +376,17 @@ impl SpecSetArgs {
         }
         if self.max_risk.is_some() {
             s.max_risk = self.max_risk;
+        }
+        if let Some(v) = self.near_miss_risk {
+            s.near_miss_risk = (v > 0).then_some(v);
+        }
+        for id in &self.pin {
+            if !s.pinned.contains(id) {
+                s.pinned.push(*id);
+            }
+        }
+        if !self.unpin.is_empty() {
+            s.pinned.retain(|id| !self.unpin.contains(id));
         }
         if let Some(v) = self.horizon {
             s.horizon_years = v;
@@ -738,7 +771,8 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
                 pull_spec(client, &spec, a.scan).await;
             }
             let defaults = client.cost_defaults().await.unwrap_or_default();
-            let listings = fetch_spec_listings(client, &spec, a.scan).await?;
+            let mut listings = fetch_spec_listings(client, &spec, a.scan).await?;
+            ensure_pinned(client, &spec, &mut listings).await;
             let ranked = crate::matching::rank(&spec, listings, &defaults);
             let top: Vec<_> = ranked.into_iter().take(a.limit).collect();
             if json {
@@ -886,11 +920,11 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
         pull_spec(client, &spec, a.scan).await;
     }
     let defaults = client.cost_defaults().await.unwrap_or_default();
-    let min_fit = a.min_fit.unwrap_or(spec.alert_min_fit);
+    let fit_floor = a.min_fit.unwrap_or(spec.alert_min_fit);
     let listings = fetch_spec_listings(client, &spec, a.scan).await?;
     let matches: Vec<_> = crate::matching::rank(&spec, listings, &defaults)
         .into_iter()
-        .filter(|m| m.score >= min_fit)
+        .filter(|m| !m.pinned && m.score >= fit_floor)
         .collect();
 
     let mut seen = watch::load_seen()?;
@@ -903,18 +937,18 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
         return Ok(());
     }
 
-    let fresh: Vec<_> = matches.iter().filter(|m| !seen.contains(&m.id)).collect();
+    let fresh: Vec<_> = matches.iter().filter(|m| !m.near_miss && !seen.contains(&m.id)).collect();
     let mut sent = 0usize;
     let mut failed = 0usize;
     for m in &fresh {
-        match telegram::send_message(&cfg.telegram_token, &cfg.telegram_chat_id, &watch::format_alert(m)).await {
+        match publish_and_alert(client, &cfg, m, &defaults, spec.horizon_years).await {
             Ok(()) => {
                 sent += 1;
                 seen.insert(m.id);
             }
             Err(e) => {
                 failed += 1;
-                eprintln!("kontu: telegram send failed for {}: {e}", m.id);
+                eprintln!("kontu: publish/alert failed for {}: {e}", m.id);
             }
         }
     }
@@ -960,6 +994,20 @@ async fn fetch_spec_listings(client: &KontuClient, spec: &Spec, scan: usize) -> 
             .list_listings(&filter, SortColumn::Price, false, scan as u32, 0)
             .await?
             .listings)
+    }
+}
+
+/// Ensure every pinned listing is in the candidate set even if it falls outside
+/// the spec's server-side filters (e.g. priced above the cap), so a pin is never
+/// silently dropped before ranking. Best-effort: a fetch failure just skips it.
+async fn ensure_pinned(client: &KontuClient, spec: &Spec, listings: &mut Vec<Listing>) {
+    for id in &spec.pinned {
+        if listings.iter().any(|l| l.id == *id) {
+            continue;
+        }
+        if let Ok(detail) = client.get_listing(*id).await {
+            listings.push(detail.listing);
+        }
     }
 }
 
@@ -1077,17 +1125,30 @@ fn print_spec(s: &Spec) {
     if s.require_infra {
         flags.push("infra-required");
     }
+    if s.single_floor {
+        flags.push("single-floor");
+    }
     if s.minimize_tco {
         flags.push("minimize-TCO");
     }
     if s.cash {
         flags.push("cash-purchase");
     }
-    let alert = format!("alert ≥ fit {:.0}", s.alert_min_fit);
+    let alert = if s.alert_min_fit > 0.0 {
+        format!("alert: gate + fit ≥ {:.0}", s.alert_min_fit)
+    } else {
+        "alert: quality gate".to_string()
+    };
     flags.push(&alert);
     if !flags.is_empty() {
         println!("flags      {}", flags.join(", "));
     }
+    let risk_str = match (s.max_risk, s.near_miss_risk) {
+        (Some(m), Some(n)) => format!("{m}  (near-miss ≤ {n})"),
+        (Some(m), None) => m.to_string(),
+        (None, Some(n)) => format!("—  (near-miss ≤ {n})"),
+        (None, None) => "—".to_string(),
+    };
     println!(
         "limits     plot ≥ {} m² · area ≥ {} m² · year ≥ {} · rooms ≥ {} · dom ≤ {} · risk ≤ {}",
         opt_i(s.min_plot_m2.map(|v| v as i64)),
@@ -1095,8 +1156,14 @@ fn print_spec(s: &Spec) {
         opt_i(s.year_min),
         opt_i(s.min_rooms),
         opt_i(s.max_dom),
-        opt_i(s.max_risk.map(|v| v as i64)),
+        risk_str,
     );
+    if !s.pinned.is_empty() {
+        println!(
+            "pinned     {}",
+            s.pinned.iter().map(|id| format!("#{id}")).collect::<Vec<_>>().join(", ")
+        );
+    }
     println!("horizon    {} yr", s.horizon_years);
     if !s.exclude.is_empty() {
         println!("exclude    {}", s.exclude.join(", "));
@@ -1143,6 +1210,145 @@ fn apply_spec_financing(cs: &mut CostState) {
     if Spec::load().map(|s| s.cash).unwrap_or(false) {
         cs.ltv = 0.0;
     }
+}
+
+/// Publish a newly-validated listing's public web page, then push a Telegram photo
+/// card whose button deep-links into the web app at that listing.
+async fn publish_and_alert(
+    client: &KontuClient,
+    cfg: &Config,
+    m: &crate::matching::Scored,
+    defaults: &crate::cost::CostDefaults,
+    horizon: u32,
+) -> Result<()> {
+    let detail = client.get_listing(m.id).await?;
+    let assessment = assess(&detail);
+    let mut cs = CostState::from_defaults(defaults);
+    cs.apply_listing(&detail.listing, &assessment, defaults);
+    apply_spec_financing(&mut cs);
+    cs.horizon = horizon;
+    let proj = cs.project(defaults);
+    let gallery = crate::ingest::fetch_gallery(&detail.listing.url).await;
+    let payload = build_publish_payload(&detail, &assessment, &proj, &gallery, horizon);
+    client.publish_page(m.id, "gate", payload).await?;
+
+    let link = format!("{}/kontu/{}", cfg.webapp_url.trim_end_matches('/'), m.id);
+    let caption = alert_caption(&detail.listing, m);
+    match gallery.first() {
+        Some(photo) => {
+            telegram::send_photo_with_button(
+                &cfg.telegram_token, &cfg.telegram_chat_id, photo, &caption, "Avaa kohde →", &link,
+            )
+            .await
+        }
+        None => {
+            telegram::send_message_with_button(
+                &cfg.telegram_token, &cfg.telegram_chat_id, &caption, "Avaa kohde →", &link,
+            )
+            .await
+        }
+    }
+}
+
+fn alert_caption(l: &Listing, m: &crate::matching::Scored) -> String {
+    let mut bits = Vec::new();
+    if let Some(a) = l.living_area_m2 {
+        bits.push(format!("{a:.0} m²"));
+    }
+    if let Some(y) = l.year_built {
+        bits.push(y.to_string());
+    }
+    if let Some(c) = &l.condition_class {
+        bits.push(format!("kunto {c}"));
+    }
+    format!(
+        "🏡 <b>{}</b>\n📍 {}\n💶 {} · ~{} €/kk · riski {}\n{}\n\n✅ Uusi validoitu kohde",
+        telegram::escape(&l.title()),
+        telegram::escape(l.municipality.as_deref().unwrap_or("?")),
+        telegram::escape(&money_opt(l.price_eur)),
+        m.monthly_living.round() as i64,
+        m.risk,
+        telegram::escape(&bits.join(" · ")),
+    )
+}
+
+fn publish_reasons(l: &Listing) -> Vec<String> {
+    let mut r = Vec::new();
+    if let Some(c) = &l.condition_class {
+        r.push(format!("Kuntoluokka {c}"));
+    }
+    if l.shore.as_deref().map(|s| s.contains("oma_ranta")).unwrap_or(false) {
+        r.push("Oma järvenranta".to_string());
+    }
+    if let Some(y) = l.year_built {
+        r.push(format!("Rakennettu {y}"));
+    }
+    r.push("Käteiskauppa — ei lainaa, ei vastiketta, ei tonttivuokraa".to_string());
+    r.push("Läpäisi kontun laatuseulan".to_string());
+    r
+}
+
+fn build_publish_payload(
+    detail: &ListingDetail,
+    assessment: &RiskAssessment,
+    proj: &Projection,
+    gallery: &[String],
+    horizon: u32,
+) -> serde_json::Value {
+    let l = &detail.listing;
+    let lat = detail.dossier.as_ref().and_then(|d| d.get("lat")).and_then(serde_json::Value::as_f64);
+    let lon = detail.dossier.as_ref().and_then(|d| d.get("lon")).and_then(serde_json::Value::as_f64);
+    let monthly = proj
+        .years
+        .first()
+        .map(|y| ((y.recurring + y.interest) / 12.0).round())
+        .unwrap_or(0.0);
+    json!({
+        "id": l.id,
+        "title": l.title(),
+        "municipality": l.municipality,
+        "address": l.address,
+        "price_eur": l.price_eur,
+        "property_type": l.property_type,
+        "holding_form": l.holding_form,
+        "living_area_m2": l.living_area_m2,
+        "plot_area_m2": l.plot_area_m2,
+        "year_built": l.year_built,
+        "room_count": l.room_count,
+        "energy_class": l.energy_class,
+        "condition_class": l.condition_class,
+        "heating_type": l.heating_type,
+        "shore": l.shore,
+        "water_body": l.water_body,
+        "plot_ownership": l.plot_ownership,
+        "water_supply": l.water_supply,
+        "sewer_system": l.sewer_system,
+        "broadband": l.broadband,
+        "roof_year": l.roof_year,
+        "pipes_renovated_year": l.pipes_renovated_year,
+        "lat": lat,
+        "lon": lon,
+        "description": l.description,
+        "source_url": l.url,
+        "gallery": gallery,
+        "cost": {
+            "monthly_living": monthly,
+            "npv_cost": proj.npv_cost,
+            "horizon_years": horizon,
+            "kiinteistovero_eur_yr": l.kiinteistovero_eur_yr,
+            "electricity_eur_yr": l.electricity_eur_yr,
+            "cash": true,
+        },
+        "risk": {
+            "score": assessment.score,
+            "band": assessment.band.label(),
+            "deferred_capex_eur": assessment.deferred_capex_eur,
+            "flags": assessment.flags.iter().map(|f| json!({ "label": f.label, "points": f.points, "capex_eur": f.capex_eur })).collect::<Vec<_>>(),
+        },
+        "reasons": publish_reasons(l),
+        "tier": "gate",
+        "published_at": "",
+    })
 }
 
 fn assess(detail: &ListingDetail) -> RiskAssessment {

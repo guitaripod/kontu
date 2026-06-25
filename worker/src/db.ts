@@ -387,6 +387,40 @@ export async function getNote(db: D1Database, id: number): Promise<string | null
   return row?.note ?? null;
 }
 
+export async function upsertPublishedPage(
+  db: D1Database,
+  listingId: number,
+  tier: string | null,
+  payloadJson: string,
+): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO published_pages (listing_id, tier, payload_json, published_at, updated_at) VALUES (?, ?, ?, ?, ?) " +
+        "ON CONFLICT(listing_id) DO UPDATE SET tier = excluded.tier, payload_json = excluded.payload_json, updated_at = excluded.updated_at",
+    )
+    .bind(listingId, tier, payloadJson, now(), now())
+    .run();
+}
+
+export async function getPublishedPage(db: D1Database, listingId: number): Promise<string | null> {
+  const row = await db
+    .prepare("SELECT payload_json FROM published_pages WHERE listing_id = ?")
+    .bind(listingId)
+    .first<{ payload_json: string }>();
+  return row?.payload_json ?? null;
+}
+
+export async function deletePublishedPage(db: D1Database, listingId: number): Promise<void> {
+  await db.prepare("DELETE FROM published_pages WHERE listing_id = ?").bind(listingId).run();
+}
+
+export async function listPublishedPages(db: D1Database): Promise<string[]> {
+  const { results } = await db
+    .prepare("SELECT payload_json FROM published_pages ORDER BY updated_at DESC")
+    .all<{ payload_json: string }>();
+  return results.map((r) => r.payload_json);
+}
+
 const LISTING_COLUMNS = [
   "property_id",
   "portal",

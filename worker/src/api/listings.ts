@@ -33,6 +33,8 @@ import {
   recordPhoto,
   isPhotoSeen,
   deletePhotosFrom,
+  upsertPublishedPage,
+  deletePublishedPage,
   type ListingsFilter,
 } from "../db";
 import { crawlTick } from "../crawl";
@@ -98,6 +100,33 @@ api.get("/listings/:id", async (c) => {
     score,
     tags,
   });
+});
+
+/**
+ * Publish (or refresh) a public listing page from a CLI-computed snapshot. The
+ * payload is stored verbatim and rendered at `/h/:id`; the Worker never
+ * recomputes cost/risk. Auto-called per gate-passer + pin during `watch run`.
+ */
+api.post("/publish", async (c) => {
+  const body = await c.req.json<{ id?: number; tier?: string; payload?: unknown }>().catch(() => null);
+  const id = Number(body?.id);
+  if (!body || !Number.isInteger(id) || body.payload == null) {
+    return c.json({ error: "bad request: need { id, payload }" }, 400);
+  }
+  // The public site is the algorithm-VALIDATED showcase: only gate-passers are
+  // published. Near-misses and manual pins stay in the CLI, never on the website.
+  if (body.tier !== "gate") {
+    return c.json({ ok: false, skipped: "only algorithm-validated (gate) listings are published" }, 422);
+  }
+  await upsertPublishedPage(c.env.DB, id, body.tier, JSON.stringify(body.payload));
+  return c.json({ ok: true, id, path: `/kontu/${id}` });
+});
+
+api.delete("/publish/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) return c.json({ error: "bad id" }, 400);
+  await deletePublishedPage(c.env.DB, id);
+  return c.json({ ok: true });
 });
 
 api.get("/properties/:id", async (c) => {

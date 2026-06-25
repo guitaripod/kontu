@@ -7,6 +7,25 @@ total-cost-of-ownership model over time and a buyer-risk score.
 
 `kontu` is Finnish for *homestead* (and the Finnish name for Tolkien's Shire).
 
+![How kontu works](docs/how-it-works.png)
+
+## How it works
+
+`kontu pull` ingests Finnish waterfront listings **from your own IP** (the portals
+block datacenter IPs), enriches each from its detail page, and stores them in
+Cloudflare D1. A quality gate — the *laatuseula* — then admits only listings that
+clear **every** hard criterion (single-storey · own lake shore · sound condition ·
+low modelled buyer-risk · year-round · own plot + working infra · ≤ 100 000 € ·
+cash). The cost-of-ownership and buyer-risk models run locally and deterministically.
+Whatever passes is published to a public, shareable web page and pushed to Telegram
+with a deep link straight to it.
+
+**Public site** (`worker/src/page.ts`): `/kontu` lists the validated homes with the
+criteria spelled out; `/kontu/:id` is a full per-house page — HD gallery with a
+pinch-zoom lightbox, a cost-of-ownership breakdown, buyer-risk flags, a map, and
+tap-to-explain labels. Pages are `noindex` and shareable; photos are hotlinked from
+the source CDN (nothing rehosted).
+
 ```
  ratatui TUI (Rust)  ──HTTPS + Bearer──▶  Cloudflare Worker (hono)
    exact-param filter                       /api/*  token-guarded REST
@@ -38,7 +57,8 @@ formulas, the 2026 seed values, the risk model, and the scraping recipes.
 - **Plane B — valuation + geodata (the backbone):** sanctioned open-government APIs
   (Tilastokeskus, MML, SYKE, Digitransit, Traficom, OSM). Zero legal risk.
 
-Single-user, personal, non-redistributed. Not affiliated with any listing portal.
+Personal project, open-sourced as-is. Not affiliated with any listing portal — all
+listing data and photos belong to their original sources.
 
 ## Quick start (local)
 
@@ -104,8 +124,11 @@ kontu defaults | market Outokumpu | sync | doctor
 ```
 
 Commands: `list · show · cost · risk · compare · score · note · pull · sync ·
-defaults · market · open · doctor`. Listings/history/photos come from the Worker; the cost and
-risk models run locally in Rust. Connection comes from `~/.config/kontu/config.toml`
+defaults · market · open · doctor · spec · match · card · watch · guide`. The
+`spec`/`match` pair drives the quality gate; `card` renders a shareable PNG one-pager;
+`watch` polls your spec and publishes + Telegram-alerts new validated homes; `guide`
+prints the full agent playbook. Listings/history/photos come from the Worker; the cost
+and risk models run locally in Rust. Connection comes from `~/.config/kontu/config.toml`
 (or `--server`/`--token`, or `KONTU_SERVER_URL`/`KONTU_API_TOKEN`).
 
 ## Real listings (residential-IP ingest)

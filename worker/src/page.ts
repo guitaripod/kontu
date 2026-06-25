@@ -1,0 +1,608 @@
+/**
+ * Public listing page (`GET /h/:id`) rendered from a snapshot the kontu CLI
+ * publishes. The cost/risk numbers are computed in the Rust engine and posted
+ * here verbatim, so the page never re-implements the models. Images are hotlinked
+ * straight from the portal CDN (no R2), and the page is `noindex` — shareable by
+ * link, not a public listings site.
+ */
+
+export interface PublishedPayload {
+  id: number;
+  title: string;
+  municipality: string | null;
+  address: string | null;
+  price_eur: number | null;
+  property_type: string | null;
+  holding_form: string | null;
+  living_area_m2: number | null;
+  plot_area_m2: number | null;
+  year_built: number | null;
+  room_count: number | null;
+  energy_class: string | null;
+  condition_class: string | null;
+  heating_type: string | null;
+  shore: string | null;
+  water_body: string | null;
+  plot_ownership: string | null;
+  water_supply?: string | null;
+  sewer_system?: string | null;
+  broadband?: string | null;
+  roof_year?: number | null;
+  pipes_renovated_year?: number | null;
+  lat: number | null;
+  lon: number | null;
+  description: string | null;
+  source_url: string;
+  gallery: string[];
+  cost: {
+    monthly_living: number;
+    npv_cost: number;
+    horizon_years: number;
+    kiinteistovero_eur_yr: number | null;
+    electricity_eur_yr: number | null;
+    cash: boolean;
+  };
+  risk: {
+    score: number;
+    band: string;
+    deferred_capex_eur: number;
+    flags: { label: string; points: number; capex_eur: number }[];
+  };
+  reasons: string[];
+  tier: "gate" | "near_miss" | "pin";
+  published_at: string;
+}
+
+const esc = (s: string): string =>
+  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+const thousands = (n: number): string => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+
+const eur = (n: number | null | undefined): string => (n == null ? "—" : `${thousands(n)} €`);
+
+/** "1,16 ha" for big plots, else "700 m²" — Finnish comma decimals. A value under
+ *  ~30 m² for a property plot is a parse glitch, not a real plot → treat as unknown. */
+function area(m2: number | null): string {
+  if (m2 == null || m2 < 30) return "—";
+  if (m2 >= 10000) return `${(m2 / 10000).toFixed(2).replace(".", ",")} ha`;
+  return `${thousands(m2)} m²`;
+}
+
+/** The risk model emits English flag labels (for the agent/CLI); translate the
+ *  known ones to Finnish for the public page. Keyword-matched so minor model
+ *  wording changes don't silently fall back to English. */
+function riskFi(label: string): string {
+  const has = (s: string) => label.toLowerCase().includes(s.toLowerCase());
+  if (label.startsWith("Risk structure:")) return "Riskirakenne:" + label.slice("Risk structure:".length);
+  if (has("Valesokkeli")) return "Valesokkeli (1960–1990) — vaatii rakenneavauksin tehtävän kuntotutkimuksen";
+  if (has("asbestos")) return "Ennen 1994 rakennettu — asbestiriski (haitta-ainekartoitus ennen remonttia)";
+  if (has("Construction-era")) return "Rakennusajan (1960–1985) riskirakenteet todennäköisiä";
+  if (has("Putkiremontti overdue")) return "Putkiremontti yli aikataulun (yli 40 v, ei tietoa uusinnasta)";
+  if (has("Putkiremontti approaching")) return "Putkiremontti lähestyy (putket yli 30 v)";
+  if (has("Foundation drains")) return "Salaojat todennäköisesti uusittava";
+  if (has("Roof past")) return "Katto ylittänyt käyttöikänsä";
+  if (has("Roof age unknown")) return "Katon ikä tuntematon ikääntyvässä talossa";
+  if (has("Oil heating")) return "Öljylämmitys — poistuva, korkeat käyttökulut (vaihto suositeltavaa)";
+  if (has("Jätevesi upgrade")) return "Jätevesijärjestelmän päivitys todennäköinen (lähellä vesistöä)";
+  if (has("Basic jätevesi")) return "Perusjätevesijärjestelmä — tarkista asetuksen 157/2017 vaatimukset";
+  if (has("rated poor")) return "Kuntoluokka huono";
+  if (has("rated fair")) return "Kuntoluokka välttävä";
+  if (has("No condition inspection")) return "Ei kuntotarkastusta tiedossa";
+  return label;
+}
+
+/** Risk band label → Finnish (the model emits low/moderate/high/severe). */
+function bandFi(band: string): string {
+  const m: Record<string, string> = { low: "matala", moderate: "kohtalainen", high: "korkea", severe: "vakava" };
+  return m[band.toLowerCase()] ?? band;
+}
+
+/** Critical facts the listing prose buries — surfaced structured-field-first, then
+ *  mined from the description. Each returns null when genuinely unknown (the page
+ *  then omits the row rather than showing a misleading blank). */
+const lc = (p: PublishedPayload): string => (p.description ?? "").toLowerCase();
+
+function ppm2(p: PublishedPayload): string | null {
+  if (p.price_eur == null || !p.living_area_m2) return null;
+  return `${thousands(p.price_eur / p.living_area_m2)} €/m²`;
+}
+function materiaaliFi(p: PublishedPayload): string | null {
+  const d = lc(p);
+  if (/hirsi|hirret|hirrest|hirsirakent/.test(d)) return "Hirsi";
+  if (/tiili|tiilist|tiiliverho/.test(d)) return "Tiili";
+  if (/element|betoni|kivital|kivirakent/.test(d)) return "Kivi / betoni";
+  if (/puurunko|puutalo|puurakente|lautaverho|rintamamies/.test(d)) return "Puu";
+  return null;
+}
+function remontitFi(p: PublishedPayload): string | null {
+  const parts: string[] = [];
+  if (p.roof_year) parts.push(`katto ${p.roof_year}`);
+  if (p.pipes_renovated_year) parts.push(`putket ${p.pipes_renovated_year}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+function netFi(p: PublishedPayload): string | null {
+  const d = lc(p);
+  const s = (p.broadband ?? "").toLowerCase();
+  if (s.includes("kuitu") || /valokuit|kuituyht|kuituliit|kuituun/.test(d)) return "Valokuitu";
+  if (s.includes("laajak") || /laajakaista|adsl|\b4g\b|\b5g\b/.test(d)) return "Laajakaista";
+  return p.broadband || null;
+}
+function vesiFi(p: PublishedPayload): string | null {
+  const d = lc(p);
+  const s = (p.water_supply ?? "").toLowerCase();
+  if (s.includes("kunnal") || /kunnallis\w* vesi|kunnan vesi|kaupungin vesi|vesijohto|vesiosuuskun|kunnallistek/.test(d)) return "Kunnallinen / vesijohto";
+  if (s.includes("pora") || /porakaivo/.test(d)) return "Porakaivo";
+  if (s.includes("kaivo") || /rengaskaivo|oma kaivo|kaivovesi/.test(d)) return "Kaivo";
+  if (/kantovesi/.test(d)) return "Kantovesi";
+  return p.water_supply || null;
+}
+function jatevesiFi(p: PublishedPayload): string | null {
+  const d = lc(p);
+  const s = (p.sewer_system ?? "").toLowerCase();
+  if (s.includes("kunnal") || /kunnallis\w* viemär|kunnan viemär|kaupungin viemär|viemäriverkos|viemäri\b/.test(d)) return "Kunnallinen viemäri";
+  if (/panospuhdistamo|pienpuhdistamo|maapuhdistamo|imeytyskent|maasuodatus/.test(d)) return "Oma puhdistamo";
+  if (s.includes("umpi") || /umpisäili|umpisaili|umpikaivo/.test(d)) return "Umpisäiliö";
+  if (s.includes("saostus") || /saostuskaivo|saostus|kolmiosa/.test(d)) return "Saostuskaivo";
+  if (/kuivakäymäl|ulkohuussi|huussi|kompostoiva wc|kompostikäymäl/.test(d)) return "Kuivakäymälä";
+  return p.sewer_system || null;
+}
+function evFi(p: PublishedPayload): string | null {
+  const d = lc(p);
+  if (/sähköaut|latauspist|latausval|ev-lat|3x25|3 x 25|kolmivaih|3-vaih|3 vaih|63a|35a/.test(d)) return "Latausvalmius";
+  if (/autotalli|autokatos|autolämmit|lämpötolppa|tolppapaik|lämmityspist/.test(d)) return "Mahdollinen (autotalli / tolppa)";
+  return null;
+}
+function rantaviivaFi(p: PublishedPayload): string | null {
+  const d = p.description ?? "";
+  const m =
+    d.match(/rantaviiva\w*\D{0,14}?(\d{2,4})\s*(?:m\b|metri)/i) ||
+    d.match(/(\d{2,4})\s*(?:m\b|metri\w*)\s+(?:omaa\s+)?rantaviiva/i) ||
+    d.match(/omaa\s+rantaa\D{0,10}?(\d{2,4})\s*(?:m\b|metri)/i);
+  return m ? `~${m[1]} m` : null;
+}
+function tieFi(p: PublishedPayload): string | null {
+  const d = lc(p);
+  if (/ei tieyhte|ei tietä perille|vain veneell/.test(d)) return "Ei tietä perille";
+  if (/ympärivuotis\w* tie|tie perille|kestopäällyst|tie pihaan|hyvät kulkuyht|hyvä tieyhte/.test(d)) return "Tie perille";
+  if (/yksityistie|tiekunta|tieoikeus/.test(d)) return "Yksityistie";
+  return null;
+}
+function palvelutFi(p: PublishedPayload): string | null {
+  const d = p.description ?? "";
+  const m =
+    d.match(/(\d{1,3})\s*km\D{0,28}?(?:keskusta|palvelu|kaup|kylä)/i) ||
+    d.match(/(?:keskusta\w*|palvelu\w*)\D{0,18}?(\d{1,3})\s*km/i);
+  return m ? `~${m[1]} km palveluihin` : null;
+}
+function saunaFi(p: PublishedPayload): string | null {
+  const d = lc(p);
+  if (/rantasauna/.test(d)) return "Rantasauna";
+  if (/sauna|kiuas|löyly|savusauna/.test(d)) return "Sauna";
+  return null;
+}
+function naapuritFi(p: PublishedPayload): string | null {
+  const d = p.description ?? "";
+  const m = d.match(/lähimp\w*\s+naapuri\w*\D{0,18}?(\d{2,4})\s*(m\b|metri\w*|km)/i);
+  if (m) return `Lähin naapuri ~${m[1]} ${/^k/i.test(m[2] ?? "") ? "km" : "m"}`;
+  const dl = d.toLowerCase();
+  if (/haja-asutus|ei naapur|naapureita ei|syrjäss|luonnonrauha|näköest|ei läpikulku|oma rauha|rauhallis/.test(dl)) return "Rauhallinen, ei lähinaapureita";
+  if (/keskeisel|keskustass|taajamass|kerrostal/.test(dl)) return "Taajama-alue";
+  if (p.plot_area_m2 != null && p.plot_area_m2 >= 10000) return "Väljä, iso oma tontti";
+  if (p.plot_area_m2 != null && p.plot_area_m2 >= 3000) return "Väljä tontti";
+  return null;
+}
+
+function info(tip?: string): string {
+  return tip ? ` <button type="button" class="info" data-tip="${esc(tip)}" aria-label="Selitä">i</button>` : "";
+}
+
+function fact(label: string, value: string, tip?: string): string {
+  if (!value || value === "—") return "";
+  return `<div class="fact"><dt>${esc(label)}${info(tip)}</dt><dd>${esc(value)}</dd></div>`;
+}
+
+/** Shareable index of every published listing — one stable URL that updates as
+ *  the published set changes. Cards link to each `/h/:id`. */
+export function renderIndexPage(items: PublishedPayload[], origin: string): string {
+  const order: Record<string, number> = { gate: 0, near_miss: 1, pin: 2 };
+  const sorted = [...items].sort(
+    (a, b) => (order[a.tier] ?? 9) - (order[b.tier] ?? 9) || (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9),
+  );
+  const cards = sorted
+    .map((p) => {
+      const cover = p.gallery[0] ?? "";
+      const place = p.municipality ?? p.title ?? `#${p.id}`;
+      const monthly = Math.round(p.cost.monthly_living);
+      return `<a class="tile" href="${origin}/kontu/${p.id}">
+        <div class="thumb">${cover ? `<img src="${esc(cover)}" loading="eager" decoding="async" alt="" referrerpolicy="no-referrer">` : ""}</div>
+        <div class="meta"><div class="place">${esc(place)}</div>
+          <div class="row"><span class="p">${eur(p.price_eur)}</span><span class="m">${thousands(monthly)} €/kk · riski ${p.risk.score}</span></div>
+          <div class="facts2">${[p.living_area_m2 != null ? `${thousands(p.living_area_m2)} m²` : "", area(p.plot_area_m2), p.year_built != null ? String(p.year_built) : "", p.condition_class ?? ""].filter((x) => x && x !== "—").map(esc).join(" · ")}</div>
+        </div></a>`;
+    })
+    .join("");
+  const n = sorted.length;
+  return `<!doctype html><html lang="fi"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>Kontu — kohteet (${n})</title>
+<meta property="og:title" content="Kontu — ${n} validoitua kohdetta"><meta property="og:description" content="Algoritmin validoimat talot Suomesta — kustannukset ja ostajan riski mukana.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#10130f">
+<style>
+:root{--bg:#10130f;--panel:#191e16;--ink:#e9ece3;--mut:#9aa394;--line:#2b3327;--green:#3fae6f;--cream:#efe7d2}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1040px;margin:0 auto;padding:2.4rem 1.2rem 5rem}
+header{border-bottom:1px solid var(--line);padding-bottom:1.3rem;margin-bottom:1.6rem}
+header h1{font-size:1.7rem;margin:.2rem 0;letter-spacing:-.01em}
+header p{color:var(--mut);margin:.25rem 0 0}
+.about{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:1.1rem 1.3rem;margin-bottom:1.7rem}
+.about p{margin:0;color:#d4dac9}
+.about .fine{margin:.8rem 0 0;color:var(--mut);font-size:.88rem}
+.critgroup{margin-top:1.1rem}
+.crittag{display:inline-block;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;font-weight:700;padding:.25rem .6rem;border-radius:7px;margin-bottom:.6rem}
+.crittag.req{background:#1d3a2a;color:#83e2a9}
+.crittag.plus{background:#3a3320;color:#e3c987}
+.chips{display:flex;flex-wrap:wrap;gap:.5rem}
+.chips span{background:#222a1f;border:1px solid var(--line);color:var(--ink);font-size:.82rem;padding:.34rem .72rem;border-radius:999px}
+.chips.plus span{border-style:dashed;color:var(--mut);background:transparent}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:1.1rem;align-items:stretch}
+.tile{display:flex;flex-direction:column;height:100%;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;text-decoration:none;color:inherit;transition:border-color .15s,transform .15s,box-shadow .15s}
+.tile:hover{border-color:var(--green);transform:translateY(-3px);box-shadow:0 10px 26px rgba(0,0,0,.32)}
+.thumb{position:relative;aspect-ratio:3/2;overflow:hidden;background:#0c0f0b}
+.thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.meta{display:flex;flex-direction:column;flex:1;padding:.85rem .95rem 1rem}
+.place{color:var(--mut);font-size:.9rem}
+.row{display:flex;justify-content:space-between;align-items:baseline;gap:.5rem;margin:.2rem 0}
+.p{font-size:1.3rem;font-weight:800;color:var(--cream);letter-spacing:-.02em}
+.m{color:var(--mut);font-size:.8rem;text-align:right;white-space:nowrap}
+.facts2{color:var(--mut);font-size:.82rem;margin-top:auto;padding-top:.5rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+footer{color:var(--mut);font-size:.85rem;text-align:center;margin-top:2.8rem;padding-top:1.4rem;border-top:1px solid var(--line)}
+@media(max-width:560px){.wrap{padding:1.6rem 1rem 4rem}header h1{font-size:1.45rem}.grid{gap:.9rem}}
+</style></head><body><div class="wrap">
+<header><h1>Kontu — validoidut kohteet</h1><p>${n} algoritmin validoimaa taloa · kustannukset ja ostajan riski mallinnettu</p></header>
+<section class="about">
+<p>Nämä eivät ole satunnainen lista — kohteet ovat <b>läpäisseet kontun laatuseulan</b>. Algoritmi käy läpi Suomen myynnissä olevat rantakohteet ja päästää listalle vain ne, jotka täyttävät <b>kaikki pakolliset</b> kriteerit. Jokaisesta on lisäksi mallinnettu todelliset asumiskulut ja ostajan riski paikallisilla kustannusmalleilla.</p>
+<div class="critgroup"><span class="crittag req">Pakolliset — kaikkien täytyttävä</span>
+<div class="chips"><span>Yksitasoinen</span><span>Oma järvenranta (ei lampi, joki tai meri)</span><span>Kuntoluokka hyvä tai parempi</span><span>Matala ostajan riski (≤ 25/100)</span><span>Ympärivuotinen (talviasuttava)</span><span>Oma tontti</span><span>Toimiva infra: vesi, viemäri, tie, sähkö</span><span>≤ 100 000 €</span><span>Käteiskaupan hinta</span></div></div>
+<div class="critgroup"><span class="crittag plus">Plussaa — ei pakollinen, mutta nostaa sijoitusta</span>
+<div class="chips plus"><span>Valokuitu (erittäin hyvä etätyölle)</span><span>Rauhallinen · ei lähinaapureita</span><span>Sähköauton lataus</span><span>Matala kokonaiskustannus</span></div></div>
+</section>
+<div class="grid">${cards || '<p class="m">Ei vielä julkaistuja kohteita.</p>'}</div>
+<footer>Koottu kontulla · luvut virallisista ilmoituksista ja paikallisista kustannusmalleista</footer>
+</div></body></html>`;
+}
+
+export function renderListingPage(p: PublishedPayload, origin: string): string {
+  const cover = p.gallery[0] ?? "";
+  const monthly = Math.round(p.cost.monthly_living);
+  const cash = p.cost.cash;
+  const title = p.address || p.title || p.municipality || `Kohde #${p.id}`;
+  const sub = [p.municipality, p.property_type].filter(Boolean).join(" · ");
+
+  const gallery = p.gallery
+    .map(
+      (u, i) =>
+        `<img src="${esc(u)}" loading="${i === 0 ? "eager" : "lazy"}" alt="Kuva ${i + 1}" referrerpolicy="no-referrer">`,
+    )
+    .join("");
+
+  const T = {
+    ppm2: "Velaton hinta jaettuna asuinpinta-alalla — vertailuluku eri kohteiden välillä.",
+    kunto: "Asunnon yleiskunto: hyvä = muuttovalmis, tyydyttävä = pientä päivitystä, välttävä/huono = remontoitava.",
+    energia: "Energiatehokkuusluokka A–G (A paras). Vaikuttaa lämmityskuluihin.",
+    remontit: "Merkittävät tehdyt remontit ja vuosi — katto ja putket ovat kalleimmat.",
+    lammitys: "Päälämmitysmuoto. Vaikuttaa käyttökuluihin ja päästöihin.",
+    vesi: "Talousveden lähde. Kunnallinen on huolettomin; kaivo vaatii huoltoa.",
+    jatevesi: "Jätevesien käsittely. Saostuskaivo tai umpisäiliö voi vaatia päivityksen (haja-asutuksen jätevesiasetus 157/2017).",
+    netti: "Käytettävissä oleva nettiyhteys. Valokuitu on nopein ja vakain — tärkeä etätyölle.",
+    ev: "Sähköauton latausmahdollisuus tai -valmius kohteessa.",
+    sauna: "Onko kohteessa sauna — rantasauna on erillinen rakennus rannassa.",
+    ranta: "Rannan omistusmuoto (oma ranta / rantaoikeus) ja vesistön tyyppi.",
+    rantaviiva: "Oman rantaviivan pituus metreinä.",
+    naapurit: "Arvio naapureiden läheisyydestä ilmoituksen ja tontin koon perusteella.",
+    tie: "Pääseekö perille autolla ympäri vuoden. Yksityistiellä voi olla tiemaksu.",
+    palvelut: "Arvioitu etäisyys lähimpiin palveluihin (kauppa, keskusta).",
+    tonttiOm: "Oma tontti vs. vuokratontti — vuokratontista maksetaan jatkuvaa vuokraa.",
+    asumiskulut: "Kuukausittainen ylläpito YHTEENSÄ — sisältää lämmityksen, sähkön, vakuutuksen, kiinteistöveron ja ylläpidon. Ei lainanlyhennystä, ei vastiketta.",
+    kvero: "Kunnan perimä vuotuinen kiinteistövero.",
+    sahko: "Arvioitu vuotuinen sähkönkulutuksen kustannus.",
+    kokonais: `Mallinnettu omistamisen nettonykyarvo ${p.cost.horizon_years} vuodelle — sisältää lykätyn korjausvelan.`,
+    riski: "0–100 mallinnettu ostajan riski (ikä, riskirakenteet, lykätty korjausvelka). Pienempi on parempi.",
+  };
+
+  const propFacts = [
+    fact("Asuinpinta-ala", p.living_area_m2 != null ? `${thousands(p.living_area_m2)} m²` : "—"),
+    fact("Hinta / m²", ppm2(p) ?? "—", T.ppm2),
+    fact("Tontti", area(p.plot_area_m2)),
+    fact("Rakennusvuosi", p.year_built != null ? String(p.year_built) : "—"),
+    fact("Rakennusmateriaali", materiaaliFi(p) ?? "—"),
+    fact("Huoneet", p.room_count != null ? String(p.room_count) : "—"),
+    fact("Kuntoluokka", p.condition_class ?? "—", T.kunto),
+    fact("Energialuokka", p.energy_class ?? "—", T.energia),
+    fact("Tehdyt remontit", remontitFi(p) ?? "—", T.remontit),
+  ].join("");
+
+  const infraFacts = [
+    fact("Lämmitys", p.heating_type ?? "—", T.lammitys),
+    fact("Vesi", vesiFi(p) ?? "—", T.vesi),
+    fact("Jätevesi", jatevesiFi(p) ?? "—", T.jatevesi),
+    fact("Nettiyhteys", netFi(p) ?? "—", T.netti),
+    fact("Auton lataus", evFi(p) ?? "—", T.ev),
+    fact("Sauna", saunaFi(p) ?? "—", T.sauna),
+  ].join("");
+
+  const locFacts = [
+    fact("Ranta", p.shore === "oma_ranta" ? `oma ranta${p.water_body ? ` · ${p.water_body}` : ""}` : (p.shore ?? "—"), T.ranta),
+    fact("Rantaviivaa", rantaviivaFi(p) ?? "—", T.rantaviiva),
+    fact("Naapurit", naapuritFi(p) ?? "—", T.naapurit),
+    fact("Tieyhteys", tieFi(p) ?? "—", T.tie),
+    fact("Palvelut", palvelutFi(p) ?? "—", T.palvelut),
+    fact("Tontin omistus", p.plot_ownership ?? "—", T.tonttiOm),
+  ].join("");
+
+  const annualBits = [
+    p.cost.kiinteistovero_eur_yr != null ? `kiinteistövero ${thousands(p.cost.kiinteistovero_eur_yr)} €/v` : "",
+    p.cost.electricity_eur_yr != null ? `sähkö ${thousands(p.cost.electricity_eur_yr)} €/v` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const priceRows = [
+    fact("Kauppahinta", eur(p.price_eur)),
+    fact(`Kokonaiskustannus (${p.cost.horizon_years} v)`, eur(p.cost.npv_cost), T.kokonais),
+  ].join("");
+  const costSection = `<section class="card"><h2>Kulut</h2>
+    <div class="costhero">
+      <div class="costbig">≈ ${thousands(monthly)} €<span>/kk</span></div>
+      <div class="costlbl"><b>Asumiskulut yhteensä</b>${info(T.asumiskulut)}<br><span class="costfine">lämmitys, sähkö, vakuutus, kiinteistövero ja ylläpito${cash ? " — ei lainaa eikä vastiketta" : ""}</span></div>
+    </div>
+    ${annualBits ? `<div class="costnote">Sisältää mm. ${esc(annualBits)}</div>` : ""}
+    <div class="grid costgrid">${priceRows}</div>
+  </section>`;
+
+  const dataSection = (heading: string, body: string): string =>
+    body ? `<section class="card"><h2>${esc(heading)}</h2><div class="grid">${body}</div></section>` : "";
+
+  const reasons = p.reasons.length
+    ? `<section class="card reasons"><h2>Miksi tämä kohde</h2><ul>${p.reasons
+        .map((r) => `<li>${esc(r)}</li>`)
+        .join("")}</ul></section>`
+    : "";
+
+  const riskFlags = p.risk.flags.length
+    ? `<ul class="flags">${p.risk.flags
+        .map(
+          (f) =>
+            `<li><span class="pts">+${f.points}</span><span class="flabel">${esc(riskFi(f.label))}${
+              f.capex_eur > 0 ? ` <span class="capex">~${thousands(f.capex_eur / 1000)} k€</span>` : ""
+            }</span></li>`,
+        )
+        .join("")}</ul>`
+    : `<p class="muted">Ei merkittäviä riskimerkintöjä.</p>`;
+
+  const map =
+    p.lat != null && p.lon != null
+      ? `<section class="card"><h2>Sijainti</h2><iframe class="map" loading="lazy" referrerpolicy="no-referrer"
+           src="https://www.openstreetmap.org/export/embed.html?bbox=${p.lon - 0.04}%2C${p.lat - 0.02}%2C${
+           p.lon + 0.04}%2C${p.lat + 0.02}&layer=mapnik&marker=${p.lat}%2C${p.lon}"></iframe>
+         <a class="maplink" href="https://www.openstreetmap.org/?mlat=${p.lat}&mlon=${p.lon}#map=13/${p.lat}/${p.lon}" target="_blank" rel="noopener">Avaa kartta →</a></section>`
+      : "";
+
+  const description = p.description
+    ? `<section class="card"><h2>Kuvaus</h2><p class="desc">${esc(p.description)}</p></section>`
+    : "";
+
+  const cashLine = cash
+    ? `<p class="cashnote">Käteiskauppa — ei asuntolainaa, ei velkaa, ei pankkia. Ei toistuvia maksuja: ei vastiketta, ei tonttivuokraa.</p>`
+    : "";
+
+  return `<!doctype html>
+<html lang="fi"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>${esc(title)} — ${eur(p.price_eur)} | kontu</title>
+<meta property="og:type" content="website">
+<meta property="og:title" content="${esc(title)} — ${eur(p.price_eur)}">
+<meta property="og:description" content="${esc(sub)} · ~${thousands(monthly)} €/kk · ${esc(p.condition_class ?? "")}">
+${cover ? `<meta property="og:image" content="${esc(cover)}">` : ""}
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#10130f">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+:root{--bg:#10130f;--panel:#191e16;--ink:#e9ece3;--mut:#9aa394;--line:#2b3327;--green:#3fae6f;--cream:#efe7d2}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+a{color:var(--green)}
+.wrap{max-width:820px;margin:0 auto;padding:0 0 5rem}
+.herowrap{position:relative}
+.dtop{position:absolute;top:0;left:0;right:0;z-index:3;display:flex;justify-content:space-between;padding:12px 14px;background:linear-gradient(rgba(0,0,0,.45),transparent);pointer-events:none}
+.dbtn{pointer-events:auto;width:40px;height:40px;display:flex;align-items:center;justify-content:center;background:rgba(16,19,15,.66);color:#fff;border:1px solid var(--line);border-radius:50%;text-decoration:none;font-size:19px;cursor:pointer;-webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px)}
+.dbtn:active{transform:scale(.94)}
+.photocount{position:absolute;right:1.4rem;bottom:1.3rem;z-index:3;background:rgba(16,19,15,.74);color:#fff;font-size:.78rem;padding:5px 11px;border-radius:999px;border:1px solid var(--line);cursor:pointer;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+.hero{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding:.85rem 16px;scroll-padding-inline:16px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.hero::-webkit-scrollbar{display:none}
+.hero img{flex:0 0 84%;min-width:0;width:84%;aspect-ratio:4/3;object-fit:contain;border-radius:14px;scroll-snap-align:center;scroll-snap-stop:always;background:#0c0f0b;cursor:zoom-in}
+.head{padding:1.4rem 1.5rem .4rem}
+.head .sub{color:var(--mut);font-size:.95rem}
+.head h1{margin:.15rem 0;font-size:1.75rem;line-height:1.18;letter-spacing:-.01em}
+.price{font-size:2.1rem;font-weight:800;color:var(--cream);margin:.55rem 0 .2rem;letter-spacing:-.02em}
+.cashnote{color:var(--green);font-weight:600;font-size:.95rem;margin:.3rem 0 0}
+section{margin:1.1rem 1.5rem 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:1.25rem 1.4rem}
+h2{display:flex;justify-content:space-between;align-items:baseline;gap:.6rem;font-size:.78rem;text-transform:uppercase;letter-spacing:.1em;color:var(--mut);margin:.1rem 0 1rem;font-weight:700}
+.riskscore{font-weight:800;color:var(--cream);letter-spacing:0;text-transform:none;font-size:.95rem;white-space:nowrap}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 1.6rem}
+.fact{display:flex;justify-content:space-between;gap:1rem;padding:.6rem 0;border-bottom:1px solid var(--line)}
+.fact dt{color:var(--mut);margin:0}.fact dd{margin:0;text-align:right;font-weight:600}
+.costhero{display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
+.costbig{font-size:2.1rem;font-weight:800;color:var(--cream);letter-spacing:-.02em;white-space:nowrap;line-height:1}
+.costbig span{font-size:1rem;font-weight:600;color:var(--mut)}
+.costlbl{color:var(--ink);font-size:.95rem;line-height:1.35;flex:1;min-width:11rem}
+.costfine{color:var(--mut);font-size:.82rem}
+.costnote{color:var(--mut);font-size:.85rem;border-top:1px solid var(--line);padding-top:.7rem;margin-top:.9rem}
+.costgrid{margin-top:.85rem;border-top:1px solid var(--line);padding-top:.1rem}
+.info{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;margin-left:4px;border:1px solid var(--line);background:#222a1f;color:var(--mut);border-radius:50%;font:italic 700 10px/1 Georgia,serif;cursor:pointer;vertical-align:middle;padding:0}
+.info:hover{color:var(--ink);border-color:var(--green)}
+#tip{position:fixed;z-index:60;max-width:260px;background:#0c0f0b;border:1px solid var(--green);color:var(--ink);font-size:.82rem;line-height:1.45;padding:.6rem .75rem;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.5);display:none}
+#tip.show{display:block}
+.lb[hidden]{display:none}
+.lb{position:fixed;inset:0;z-index:70;background:#060805}
+.lb-stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden;touch-action:none}
+.lb-img{max-width:100vw;max-height:100vh;object-fit:contain;transform-origin:center center;will-change:transform;user-select:none;-webkit-user-drag:none;touch-action:none}
+.lb-top{position:absolute;top:0;left:0;right:0;z-index:4;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:linear-gradient(rgba(0,0,0,.55),transparent)}
+.lb-count{color:#fff;font-size:.85rem;font-variant-numeric:tabular-nums}
+.lb button{background:rgba(25,30,22,.82);color:#fff;border:1px solid var(--line);border-radius:999px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
+.lb-top button{width:40px;height:40px;font-size:18px}
+.lb-nav{position:absolute;top:50%;transform:translateY(-50%);z-index:4;width:46px;height:46px;font-size:28px}
+.lb-prev{left:12px}.lb-next{right:12px}
+.lb-thumbs{position:absolute;inset:0;z-index:3;display:none;grid-template-columns:repeat(2,1fr);grid-auto-rows:min-content;gap:8px;overflow-y:auto;padding:64px 10px 20px;background:#060805;-webkit-overflow-scrolling:touch}
+.lb-thumbs img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:8px;cursor:pointer;background:#0c0f0b}
+.lb.grid .lb-thumbs{display:grid}
+.lb.grid .lb-stage,.lb.grid .lb-nav{display:none}
+@media(min-width:561px){.lb-img{max-width:94vw;max-height:92vh}}
+.reasons ul{margin:0;padding-left:1.15rem}.reasons li{margin:.3rem 0;color:#dbe1d2}
+.flags{list-style:none;margin:0;padding:0}
+.flags li{display:flex;gap:.7rem;align-items:baseline;padding:.55rem 0;border-bottom:1px solid var(--line)}
+.flags li:last-child{border-bottom:0}
+.pts{flex:0 0 auto;min-width:2.1rem;text-align:center;color:var(--mut);font-variant-numeric:tabular-nums;font-size:.82rem;background:#222a1f;border-radius:6px;padding:1px 0}
+.flabel{flex:1}
+.capex{color:#d8a13a;font-size:.85em;white-space:nowrap}
+.desc{white-space:pre-wrap;color:#d4dac9;margin:0}
+.map{width:100%;height:320px;border:0;border-radius:14px;filter:grayscale(.15) contrast(1.04);display:block}
+.maplink{display:inline-block;margin-top:.7rem;text-decoration:none}
+.muted{color:var(--mut)}
+.src{display:block;margin:1.4rem 1.5rem 0}
+.src a{display:block;text-align:center;background:var(--cream);color:#10130f;font-weight:700;padding:1rem;border-radius:14px;text-decoration:none;transition:transform .12s,filter .12s}
+.src a:hover{filter:brightness(1.05);transform:translateY(-1px)}
+.foot{margin:2rem 1.5rem 0;color:var(--mut);font-size:.85rem;text-align:center;line-height:1.5}
+@media(max-width:560px){
+  .wrap{padding-bottom:4rem}
+  .grid{grid-template-columns:1fr;gap:0}
+  section{margin:1rem 1rem 0}
+  .head{padding:1.4rem 1rem .4rem}
+  .head h1{font-size:1.5rem}
+  .price{font-size:1.85rem}
+  .hero{padding:.6rem 12px}
+  .hero img{flex:0 0 86%;width:86%}
+  .lb-nav{width:40px;height:40px;font-size:24px}
+  .src{margin:1.2rem 1rem 0}.foot{margin:1.6rem 1rem 0}
+}
+</style></head>
+<body><div class="wrap">
+<div class="herowrap">
+<div class="dtop">
+<a class="dbtn" href="${origin}/kontu" aria-label="Takaisin listaan">←</a>
+<button class="dbtn" id="share" type="button" aria-label="Jaa">⤴</button>
+</div>
+<div class="hero">${gallery || '<div style="color:#555;margin:auto">ei kuvia</div>'}</div>
+${p.gallery.length > 1 ? `<button class="photocount" id="pcount" type="button">▦ ${p.gallery.length} kuvaa</button>` : ""}
+</div>
+<div class="head">
+  <div class="sub">${esc(sub)}</div>
+  <h1>${esc(title)}</h1>
+  <div class="price">${eur(p.price_eur)}</div>
+  ${cashLine}
+</div>
+
+${costSection}
+${reasons}
+${dataSection("Kohteen tiedot", propFacts)}
+${dataSection("Talotekniikka & infra", infraFacts)}
+${dataSection("Sijainti & ympäristö", locFacts)}
+<section class="card"><h2><span>Ostajan riski${info(T.riski)}</span> <span class="riskscore">${p.risk.score}/100 · ${esc(
+    bandFi(p.risk.band),
+  )}</span></h2>${riskFlags}${
+    p.risk.deferred_capex_eur > 0
+      ? `<p class="muted" style="margin:.8rem 0 0">Arvioitu lykätty korjausvelka ~${thousands(
+          p.risk.deferred_capex_eur,
+        )} €</p>`
+      : ""
+  }</section>
+${description}
+${map}
+<div class="src"><a href="${esc(p.source_url)}" target="_blank" rel="noopener">Avaa alkuperäinen ilmoitus →</a></div>
+<div class="foot"><a href="${origin}/kontu">← Kaikki validoidut kohteet</a><br><br>Koottu kontulla — luvut virallisesta ilmoituksesta ja paikallisista kustannusmalleista. Kuvat: alkuperäinen ilmoitus.</div>
+</div>
+<div id="tip"></div>
+<div id="lb" class="lb" hidden>
+  <div class="lb-top">
+    <button class="lb-grid" type="button" aria-label="Ruudukko">▦</button>
+    <div class="lb-count"></div>
+    <button class="lb-x" type="button" aria-label="Sulje">×</button>
+  </div>
+  <button class="lb-nav lb-prev" type="button" aria-label="Edellinen">‹</button>
+  <div class="lb-stage"><img class="lb-img" alt=""></div>
+  <button class="lb-nav lb-next" type="button" aria-label="Seuraava">›</button>
+  <div class="lb-thumbs"></div>
+</div>
+<script>
+(function(){
+  var imgs=${JSON.stringify(p.gallery).replace(/</g, "\\u003c")};
+  var lb=document.getElementById('lb');
+  if(lb&&imgs.length){
+    var stage=lb.querySelector('.lb-stage'),img=lb.querySelector('.lb-img'),cnt=lb.querySelector('.lb-count'),thumbs=lb.querySelector('.lb-thumbs');
+    var idx=0,scale=1,tx=0,ty=0;
+    function applyT(){img.style.transform='translate('+tx+'px,'+ty+'px) scale('+scale+')';}
+    function reset(){scale=1;tx=0;ty=0;}
+    function show(n){idx=(n+imgs.length)%imgs.length;img.src=imgs[idx];cnt.textContent=(idx+1)+' / '+imgs.length;reset();img.style.transition='';applyT();}
+    function open(n){lb.classList.remove('grid');show(n);lb.hidden=false;document.body.style.overflow='hidden';}
+    function close(){lb.hidden=true;document.body.style.overflow='';}
+    function buildThumbs(){if(thumbs.childElementCount)return;imgs.forEach(function(u,i){var t=document.createElement('img');t.src=u;t.loading='lazy';t.referrerPolicy='no-referrer';t.addEventListener('click',function(){lb.classList.remove('grid');show(i);});thumbs.appendChild(t);});}
+    Array.prototype.forEach.call(document.querySelectorAll('.hero img'),function(el,i){el.addEventListener('click',function(){open(i);});});
+    var pc=document.getElementById('pcount');if(pc)pc.addEventListener('click',function(){open(0);});
+    lb.querySelector('.lb-next').addEventListener('click',function(e){e.stopPropagation();show(idx+1);});
+    lb.querySelector('.lb-prev').addEventListener('click',function(e){e.stopPropagation();show(idx-1);});
+    lb.querySelector('.lb-x').addEventListener('click',close);
+    lb.querySelector('.lb-grid').addEventListener('click',function(){buildThumbs();lb.classList.toggle('grid');});
+    stage.addEventListener('click',function(e){if(e.target===stage&&scale<=1.02)close();});
+    document.addEventListener('keydown',function(e){if(lb.hidden)return;if(e.key==='Escape'){if(lb.classList.contains('grid'))lb.classList.remove('grid');else close();}else if(e.key==='ArrowRight')show(idx+1);else if(e.key==='ArrowLeft')show(idx-1);});
+    function dist(t){return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);}
+    var sd=0,ss=1,px=0,py=0,swipe=null,lastTap=0;
+    stage.addEventListener('touchstart',function(e){
+      if(e.touches.length===2){sd=dist(e.touches);ss=scale;swipe=null;}
+      else if(e.touches.length===1){
+        var now=Date.now();
+        if(now-lastTap<300){img.style.transition='transform .15s';if(scale>1.02){reset();}else{scale=2.5;}applyT();lastTap=0;e.preventDefault();}
+        else{lastTap=now;}
+        if(scale>1.02){px=e.touches[0].clientX-tx;py=e.touches[0].clientY-ty;swipe=null;}else{swipe=e.touches[0].clientX;}
+      }
+    },{passive:false});
+    stage.addEventListener('touchmove',function(e){
+      img.style.transition='';
+      if(e.touches.length===2){e.preventDefault();scale=Math.min(Math.max(ss*dist(e.touches)/sd,1),5);applyT();}
+      else if(e.touches.length===1&&scale>1.02){e.preventDefault();tx=e.touches[0].clientX-px;ty=e.touches[0].clientY-py;applyT();}
+    },{passive:false});
+    stage.addEventListener('touchend',function(e){
+      if(scale<1.05){img.style.transition='transform .15s';reset();applyT();}
+      if(swipe!==null&&e.changedTouches.length){var dx=e.changedTouches[0].clientX-swipe;if(scale<=1.02&&Math.abs(dx)>45)show(idx+(dx<0?1:-1));swipe=null;}
+    });
+  }
+  var sh=document.getElementById('share');
+  if(sh)sh.addEventListener('click',function(){
+    var url=location.href.split('?')[0];
+    if(navigator.share){navigator.share({title:document.title,url:url}).catch(function(){});}
+    else if(navigator.clipboard){navigator.clipboard.writeText(url);var o=sh.textContent;sh.textContent='✓';setTimeout(function(){sh.textContent=o;},1200);}
+  });
+  var tip=document.getElementById('tip'),cur=null;
+  function hideTip(){tip.className='';cur=null;}
+  document.addEventListener('click',function(e){
+    var b=e.target.closest?e.target.closest('.info'):null;
+    if(b){
+      e.preventDefault();e.stopPropagation();
+      if(cur===b){hideTip();return;}
+      tip.textContent=b.getAttribute('data-tip')||'';tip.className='show';cur=b;
+      var r=b.getBoundingClientRect(),tw=Math.min(260,window.innerWidth-16);
+      tip.style.maxWidth=tw+'px';
+      tip.style.left=Math.min(Math.max(8,r.left-tw/2+8),window.innerWidth-tw-8)+'px';
+      tip.style.top=(r.bottom+8)+'px';
+      var th=tip.getBoundingClientRect().height;
+      if(r.bottom+8+th>window.innerHeight)tip.style.top=Math.max(8,r.top-th-8)+'px';
+      return;
+    }
+    if(cur&&e.target!==tip)hideTip();
+  });
+  window.addEventListener('scroll',hideTip,{passive:true});
+})();
+</script>
+</body></html>`;
+}

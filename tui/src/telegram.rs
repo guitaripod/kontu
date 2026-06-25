@@ -40,6 +40,72 @@ pub async fn send_message(token: &str, chat_id: &str, html: &str) -> Result<()> 
     }
 }
 
+/// Send a photo card with one inline "open" button — the best UX for a new-listing
+/// alert: the cover image is the body, the caption carries the facts, and the
+/// button deep-links into the web app. Falls back to a text+link message if
+/// Telegram cannot fetch the photo (CDN hiccup, missing cover).
+pub async fn send_photo_with_button(
+    token: &str,
+    chat_id: &str,
+    photo_url: &str,
+    caption_html: &str,
+    button_text: &str,
+    button_url: &str,
+) -> Result<()> {
+    let markup = json!({ "inline_keyboard": [[{ "text": button_text, "url": button_url }]] });
+    let resp: Value = http()?
+        .post(format!("{API}/bot{token}/sendPhoto"))
+        .json(&json!({
+            "chat_id": chat_id,
+            "photo": photo_url,
+            "caption": caption_html,
+            "parse_mode": "HTML",
+            "reply_markup": markup,
+        }))
+        .send()
+        .await
+        .context_telegram()?
+        .json()
+        .await?;
+    if resp.get("ok").and_then(Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+    send_message_with_button(token, chat_id, caption_html, button_text, button_url).await
+}
+
+/// Text alert with one inline "open" button (the photo-less fallback / no-cover path).
+pub async fn send_message_with_button(
+    token: &str,
+    chat_id: &str,
+    html: &str,
+    button_text: &str,
+    button_url: &str,
+) -> Result<()> {
+    let markup = json!({ "inline_keyboard": [[{ "text": button_text, "url": button_url }]] });
+    let resp: Value = http()?
+        .post(format!("{API}/bot{token}/sendMessage"))
+        .json(&json!({
+            "chat_id": chat_id,
+            "text": html,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": false,
+            "reply_markup": markup,
+        }))
+        .send()
+        .await
+        .context_telegram()?
+        .json()
+        .await?;
+    if resp.get("ok").and_then(Value::as_bool) == Some(true) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "telegram send failed: {}",
+            resp.get("description").and_then(Value::as_str).unwrap_or("unknown error")
+        ))
+    }
+}
+
 /// Resolve the chat id from the most recent update sent to the bot. The user
 /// messages the bot once, then this picks up the chat to deliver alerts to.
 pub async fn detect_chat_id(token: &str) -> Result<String> {
