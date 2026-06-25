@@ -420,10 +420,10 @@ export function renderListingPage(p: PublishedPayload, origin: string): string {
 
   const map =
     p.lat != null && p.lon != null
-      ? `<section class="card"><h2>Sijainti</h2><iframe class="map" loading="lazy" referrerpolicy="no-referrer"
-           src="https://www.openstreetmap.org/export/embed.html?bbox=${p.lon - 0.04}%2C${p.lat - 0.02}%2C${
-           p.lon + 0.04}%2C${p.lat + 0.02}&layer=mapnik&marker=${p.lat}%2C${p.lon}"></iframe>
-         <a class="maplink" href="https://www.openstreetmap.org/?mlat=${p.lat}&mlon=${p.lon}#map=13/${p.lat}/${p.lon}" target="_blank" rel="noopener">Avaa kartta →</a></section>`
+      ? `<section class="card"><h2>Kartta &amp; lähistö ${info("Interaktiivinen kartta (MapLibre + OpenStreetMap). Vihreä merkki on kohde; muut merkit ovat lähimmät palvelut, jotka haetaan OpenStreetMapista. Maaseutukohteessa palveluja on luonnollisesti vähän.")}</h2>
+         <div id="map" class="mlmap" data-lat="${p.lat}" data-lon="${p.lon}"></div>
+         <div id="nearby" class="nearby"><span class="muted">Haetaan lähipalveluja…</span></div>
+         <a class="maplink" href="https://www.openstreetmap.org/?mlat=${p.lat}&mlon=${p.lon}#map=13/${p.lat}/${p.lon}" target="_blank" rel="noopener">Avaa isompi kartta →</a></section>`
       : "";
 
   const description = p.description
@@ -447,6 +447,7 @@ ${cover ? `<meta property="og:image" content="${esc(cover)}">` : ""}
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#10130f">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css" rel="stylesheet">
 <style>
 :root{--bg:#10130f;--panel:#191e16;--ink:#e9ece3;--mut:#9aa394;--line:#2b3327;--green:#3fae6f;--cream:#efe7d2}
 *{box-sizing:border-box}
@@ -507,8 +508,19 @@ h2{display:flex;justify-content:space-between;align-items:baseline;gap:.6rem;fon
 .flabel{flex:1}
 .capex{color:#d8a13a;font-size:.85em;white-space:nowrap}
 .desc{white-space:pre-wrap;color:#d4dac9;margin:0}
-.map{width:100%;height:320px;border:0;border-radius:14px;filter:grayscale(.15) contrast(1.04);display:block}
-.maplink{display:inline-block;margin-top:.7rem;text-decoration:none}
+.mlmap{width:100%;height:360px;border-radius:14px;overflow:hidden;background:#0c0f0a}
+.mlmap .maplibregl-ctrl-attrib{font-size:10px}
+.mlmap .maplibregl-popup-content{background:#171c12;color:var(--cream);border-radius:10px;padding:.5rem .7rem;font-size:.85rem;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+.mlmap .maplibregl-popup-tip{border-top-color:#171c12;border-bottom-color:#171c12}
+.mlmap .maplibregl-popup-close-button{color:var(--mut)}
+.poi{width:12px;height:12px;border-radius:50%;background:var(--cream);border:2px solid #0c0f0a;box-shadow:0 0 0 1px rgba(239,231,210,.45);cursor:pointer}
+.poi.poi-town{background:#d8a13a}
+.nearby{margin-top:.9rem;font-size:.92rem}
+.nearby .nbhead{color:var(--mut);font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.35rem}
+.nearby .nb{display:flex;justify-content:space-between;gap:1rem;padding:.45rem 0;border-bottom:1px solid var(--line)}
+.nearby .nb:last-child{border-bottom:0}
+.nearby .nbk{color:#d4dac9}.nearby .nbd{color:var(--mut);font-variant-numeric:tabular-nums;white-space:nowrap}
+.maplink{display:inline-block;margin-top:.9rem;text-decoration:none}
 .muted{color:var(--mut)}
 .src{display:block;margin:1.4rem 1.5rem 0}
 .src a{display:block;text-align:center;background:var(--cream);color:#10130f;font-weight:700;padding:1rem;border-radius:14px;text-decoration:none;transition:transform .12s,filter .12s}
@@ -641,6 +653,44 @@ ${map}
     if(cur&&e.target!==tip)hideTip();
   });
   window.addEventListener('scroll',hideTip,{passive:true});
+})();
+</script>
+<script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
+<script>
+(function(){
+  var el=document.getElementById('map');
+  if(!el||!window.maplibregl)return;
+  var LAT=parseFloat(el.dataset.lat),LON=parseFloat(el.dataset.lon);
+  if(!isFinite(LAT)||!isFinite(LON))return;
+  var map=new maplibregl.Map({container:'map',style:'https://tiles.openfreemap.org/styles/liberty',center:[LON,LAT],zoom:11.3,attributionControl:{compact:true}});
+  map.addControl(new maplibregl.NavigationControl({showCompass:false}),'top-right');
+  map.scrollZoom.disable();
+  new maplibregl.Marker({color:'#3fae6f'}).setLngLat([LON,LAT]).setPopup(new maplibregl.Popup({offset:26}).setText('Kohde')).addTo(map);
+  var LABELS={supermarket:'Ruokakauppa',convenience:'Lähikauppa',general:'Kauppa',department_store:'Tavaratalo',school:'Koulu',kindergarten:'Päiväkoti',pharmacy:'Apteekki',fuel:'Huoltoasema',hospital:'Sairaala',clinic:'Terveysasema',doctors:'Lääkäri',bank:'Pankki',post_office:'Posti',restaurant:'Ravintola',cafe:'Kahvila',library:'Kirjasto',town:'Kaupunki',village:'Kylä'};
+  function km(la,lo){var R=6371,r=function(x){return x*Math.PI/180;},a=r(la-LAT),b=r(lo-LON);var h=Math.sin(a/2)*Math.sin(a/2)+Math.cos(r(LAT))*Math.cos(r(la))*Math.sin(b/2)*Math.sin(b/2);return R*2*Math.asin(Math.sqrt(h));}
+  var nb=document.getElementById('nearby');
+  var q='[out:json][timeout:25];(nwr(around:6000,'+LAT+','+LON+')[shop~"supermarket|convenience|general|department_store"];nwr(around:9000,'+LAT+','+LON+')[amenity~"school|kindergarten|pharmacy|fuel|hospital|clinic|doctors|bank|post_office|restaurant|cafe|library"];nwr(around:14000,'+LAT+','+LON+')[place~"town|village"];);out tags center 120;';
+  function run(eps){
+    if(!eps.length){if(nb)nb.innerHTML='<span class="muted">Lähipalvelujen haku ei juuri nyt onnistunut.</span>';return;}
+    fetch(eps[0],{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(q)})
+      .then(function(r){if(!r.ok)throw 0;return r.json();})
+      .then(function(d){render(d.elements||[]);})
+      .catch(function(){run(eps.slice(1));});
+  }
+  function render(els){
+    var items=els.map(function(e){var c=e.center||e,t=e.tags||{},k=t.shop||t.amenity||t.place||'';return{n:t.name||'',k:k,lat:c.lat,lon:c.lon,d:(c.lat!=null)?km(c.lat,c.lon):null};})
+      .filter(function(x){return x.lat!=null&&x.d!=null&&LABELS[x.k];}).sort(function(a,b){return a.d-b.d;});
+    var byCat={};items.forEach(function(x){if(!byCat[x.k])byCat[x.k]=x;});
+    items.slice(0,28).forEach(function(x){
+      var m=document.createElement('div');m.className='poi'+((x.k==='town'||x.k==='village')?' poi-town':'');
+      new maplibregl.Marker({element:m}).setLngLat([x.lon,x.lat]).setPopup(new maplibregl.Popup({offset:14}).setText((LABELS[x.k]||x.k)+(x.n?' · '+x.n:''))).addTo(map);
+    });
+    if(!nb)return;
+    var keys=Object.keys(byCat).sort(function(a,b){return byCat[a].d-byCat[b].d;}).slice(0,9);
+    if(!keys.length){nb.innerHTML='<span class="muted">Ei kartoitettuja palveluja lähistöllä — syrjäinen, rauhallinen sijainti.</span>';return;}
+    nb.innerHTML='<div class="nbhead">Lähimmät palvelut (OpenStreetMap)</div>'+keys.map(function(k){var x=byCat[k];return '<div class="nb"><span class="nbk">'+(LABELS[k]||k)+(x.n?' · '+x.n:'')+'</span><span class="nbd">'+x.d.toFixed(1).replace('.',',')+' km</span></div>';}).join('');
+  }
+  map.on('load',function(){run(['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']);});
 })();
 </script>
 </body></html>`;

@@ -1296,8 +1296,12 @@ fn build_publish_payload(
     horizon: u32,
 ) -> serde_json::Value {
     let l = &detail.listing;
-    let lat = detail.dossier.as_ref().and_then(|d| d.get("lat")).and_then(serde_json::Value::as_f64);
-    let lon = detail.dossier.as_ref().and_then(|d| d.get("lon")).and_then(serde_json::Value::as_f64);
+    let lat = l
+        .lat
+        .or_else(|| detail.dossier.as_ref().and_then(|d| d.get("lat")).and_then(serde_json::Value::as_f64));
+    let lon = l
+        .lon
+        .or_else(|| detail.dossier.as_ref().and_then(|d| d.get("lon")).and_then(serde_json::Value::as_f64));
     let monthly = proj
         .years
         .first()
