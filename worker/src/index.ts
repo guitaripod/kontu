@@ -48,8 +48,16 @@ app.get("/kontu", async (c) => {
       /* skip a corrupt row */
     }
   }
+  const stat = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS scanned, COUNT(DISTINCT municipality) AS municipalities, MAX(last_seen) AS updated FROM listings",
+  ).first<{ scanned: number; municipalities: number; updated: number | null }>();
   const origin = new URL(c.req.url).origin;
-  return c.html(renderIndexPage(items, origin), 200, {
+  const market = {
+    scanned: stat?.scanned ?? items.length,
+    municipalities: stat?.municipalities ?? 0,
+    updated: stat?.updated ?? null,
+  };
+  return c.html(renderIndexPage(items, origin, market), 200, {
     "Cache-Control": "public, max-age=300",
     "X-Robots-Tag": "noindex, nofollow",
   });

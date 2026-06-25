@@ -249,7 +249,11 @@ function fact(label: string, value: string, tip?: string): string {
 
 /** Shareable index of every published listing — one stable URL that updates as
  *  the published set changes. Cards link to each `/h/:id`. */
-export function renderIndexPage(items: PublishedPayload[], origin: string): string {
+export function renderIndexPage(
+  items: PublishedPayload[],
+  origin: string,
+  market?: { scanned: number; municipalities: number; updated: number | null },
+): string {
   const order: Record<string, number> = { gate: 0, near_miss: 1, pin: 2 };
   const sorted = [...items].sort(
     (a, b) => (order[a.tier] ?? 9) - (order[b.tier] ?? 9) || (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9),
@@ -268,10 +272,19 @@ export function renderIndexPage(items: PublishedPayload[], origin: string): stri
     })
     .join("");
   const n = sorted.length;
+  const scanned = market?.scanned ?? n;
+  const munis = market?.municipalities ?? 0;
+  const updated =
+    market?.updated != null
+      ? new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki", day: "numeric", month: "numeric", year: "numeric" }).format(
+          new Date(market.updated * 1000),
+        )
+      : null;
   return `<!doctype html><html lang="fi"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow"><title>Kontu — kohteet (${n})</title>
-<meta property="og:title" content="Kontu — ${n} validoitua kohdetta"><meta property="og:description" content="Algoritmin validoimat talot Suomesta — kustannukset ja ostajan riski mukana.">
+<meta property="og:title" content="Kontu — ${n} validoitua kohdetta"><meta property="og:description" content="Laatuseula kävi läpi ${scanned} ranta-asuntoilmoitusta ${munis} kunnasta — ${n} läpäisi. Kustannukset ja ostajan riski mallinnettu.">
+<meta property="og:type" content="website"><meta name="twitter:card" content="summary">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#10130f">
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f3f1e8">
@@ -286,6 +299,14 @@ header p{color:var(--mut);margin:.25rem 0 0}
 .about{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:1.1rem 1.3rem;margin-bottom:1.7rem}
 .about p{margin:0;color:var(--ink2)}
 .about .fine{margin:.8rem 0 0;color:var(--mut);font-size:.88rem}
+.funnel{display:flex;align-items:stretch;gap:.7rem;margin:1.4rem 0 .8rem;flex-wrap:wrap}
+.fstat{flex:1;min-width:96px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:.85rem 1rem;display:flex;flex-direction:column;gap:.1rem}
+.fstat.hit{border-color:var(--green);background:var(--chipgbg)}
+.fnum{font-size:1.85rem;font-weight:800;letter-spacing:-.02em;color:var(--ink);line-height:1.05}
+.fstat.hit .fnum{color:var(--green)}
+.flbl{font-size:.76rem;color:var(--mut);line-height:1.25}
+.fstat.hit .flbl{color:var(--green)}
+.upd{margin:0 0 1.7rem;color:var(--mut);font-size:.82rem}
 .critgroup{margin-top:1.1rem}
 .crittag{display:inline-block;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;font-weight:700;padding:.25rem .6rem;border-radius:7px;margin-bottom:.6rem}
 .crittag.req{background:var(--chipgbg);color:var(--chipg)}
@@ -321,7 +342,13 @@ header p{color:var(--mut);margin:.25rem 0 0}
 footer{color:var(--mut);font-size:.85rem;text-align:center;margin-top:2.8rem;padding-top:1.4rem;border-top:1px solid var(--line)}
 @media(max-width:560px){.wrap{padding:1.6rem 1rem 4rem}header h1{font-size:1.45rem}.grid{gap:.9rem}}
 </style></head><body><div class="wrap">
-<header><h1>Kontu — validoidut kohteet</h1><p>${n} algoritmin validoimaa taloa · kustannukset ja ostajan riski mallinnettu</p></header>
+<header><h1>Kontu — validoidut kohteet</h1><p>Suomen myynnissä olevat ranta-asunnot yhden tiukan laatuseulan läpi.</p></header>
+<div class="funnel">
+  <div class="fstat"><span class="fnum">${thousands(scanned)}</span><span class="flbl">ranta-ilmoitusta arvioitu</span></div>
+  <div class="fstat"><span class="fnum">${munis}</span><span class="flbl">kuntaa eri puolilla Suomea</span></div>
+  <div class="fstat hit"><span class="fnum">${n}</span><span class="flbl">läpäisi laatuseulan</span></div>
+</div>
+${updated ? `<p class="upd">Tiedot päivitetty ${updated} · vain laatuseulan läpäisseet näkyvät täällä.</p>` : ""}
 <section class="about">
 <p>Nämä eivät ole satunnainen lista — kohteet ovat <b>läpäisseet kontun laatuseulan</b>. Algoritmi käy läpi Suomen myynnissä olevat rantakohteet ja päästää listalle vain ne, jotka täyttävät <b>kaikki pakolliset</b> kriteerit. Jokaisesta on lisäksi mallinnettu todelliset asumiskulut ja ostajan riski paikallisilla kustannusmalleilla.</p>
 <div class="critgroup"><span class="crittag req">Pakolliset — kaikkien täytyttävä</span>
