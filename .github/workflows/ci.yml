@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Worker — install, typecheck, test
+        working-directory: worker
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tui
+      - name: TUI — test
+        working-directory: tui
+        run: cargo test --quiet
+
+  # Auto-deploy the Worker after tests pass on master. Requires the repo secret
+  # CLOUDFLARE_API_TOKEN (Workers Scripts + D1 edit); CLOUDFLARE_ACCOUNT_ID optional.
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install worker deps
+        working-directory: worker
+        run: npm ci
+      - name: Apply D1 migrations + deploy Worker
+        working-directory: worker
+        run: |
+          npx wrangler d1 migrations apply kontu --remote
+          npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

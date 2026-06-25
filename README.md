@@ -161,6 +161,11 @@ writes the real `database_id` into `wrangler.jsonc`, applies migrations + seed,
 prompts for the `API_TOKEN` secret, and deploys. Then put the deployed URL + token
 into `~/.config/kontu/config.toml`.
 
+CI (`.github/workflows/ci.yml`) runs the Rust + Worker tests on every push and PR,
+and **auto-deploys the Worker** (migrations + `wrangler deploy`) after tests pass on
+`master` — add a `CLOUDFLARE_API_TOKEN` repo secret (Workers Scripts + D1 edit) to
+enable the deploy step.
+
 ## Tests
 
 - Rust: `cd tui && cargo test` (cost engine, risk model, models, API client, and
