@@ -245,6 +245,20 @@ header p{color:var(--mut);margin:.25rem 0 0}
 .chips{display:flex;flex-wrap:wrap;gap:.5rem}
 .chips span{background:#222a1f;border:1px solid var(--line);color:var(--ink);font-size:.82rem;padding:.34rem .72rem;border-radius:999px}
 .chips.plus span{border-style:dashed;color:var(--mut);background:transparent}
+.explain{margin-bottom:1.9rem}
+.exh{font-size:.78rem;text-transform:uppercase;letter-spacing:.1em;color:var(--mut);font-weight:700;margin:0 0 .9rem}
+.explain details{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:.6rem;overflow:hidden;transition:border-color .15s}
+.explain details[open]{border-color:#33402c}
+.explain summary{cursor:pointer;list-style:none;padding:.95rem 1.2rem;font-weight:600;color:var(--ink);display:flex;justify-content:space-between;align-items:center;gap:1rem}
+.explain summary::-webkit-details-marker{display:none}
+.explain summary::after{content:'+';color:var(--green);font-size:1.35rem;font-weight:400;line-height:1}
+.explain details[open] summary::after{content:'–'}
+.explain summary:hover{background:#1d231a}
+.explain .body{padding:0 1.2rem 1.1rem;color:#d4dac9;line-height:1.62;font-size:.95rem}
+.explain .body p{margin:.1rem 0 .7rem}.explain .body p:last-child{margin-bottom:0}
+.explain .body ul{margin:.2rem 0 0;padding-left:1.1rem}
+.explain .body li{margin:.3rem 0}
+.explain .body b{color:var(--ink)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:1.1rem;align-items:stretch}
 .tile{display:flex;flex-direction:column;height:100%;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;text-decoration:none;color:inherit;transition:border-color .15s,transform .15s,box-shadow .15s}
 .tile:hover{border-color:var(--green);transform:translateY(-3px);box-shadow:0 10px 26px rgba(0,0,0,.32)}
@@ -266,6 +280,31 @@ footer{color:var(--mut);font-size:.85rem;text-align:center;margin-top:2.8rem;pad
 <div class="chips"><span>Yksitasoinen</span><span>Oma järvenranta (ei lampi, joki tai meri)</span><span>Kuntoluokka hyvä tai parempi</span><span>Matala ostajan riski (≤ 25/100)</span><span>Ympärivuotinen (talviasuttava)</span><span>Oma tontti</span><span>Toimiva infra: vesi, viemäri, tie, sähkö</span><span>≤ 100 000 €</span><span>Käteiskaupan hinta</span></div></div>
 <div class="critgroup"><span class="crittag plus">Plussaa — ei pakollinen, mutta nostaa sijoitusta</span>
 <div class="chips plus"><span>Valokuitu (erittäin hyvä etätyölle)</span><span>Rauhallinen · ei lähinaapureita</span><span>Sähköauton lataus</span><span>Matala kokonaiskustannus</span></div></div>
+</section>
+<section class="explain">
+<h2 class="exh">Miten algoritmi toimii</h2>
+<details open><summary>Mikä tämä lista on?</summary><div class="body">
+<p>Tämä ei ole hakukone vaan <b>käsin määritellyn algoritmin — kontun laatuseulan — läpäisseiden kotien lista</b>. Algoritmi käy läpi Suomen myynnissä olevat rantakohteet ja päästää listalle vain ne, jotka täyttävät jokaisen pakollisen kriteerin. Jokaisesta on lisäksi laskettu todelliset asumiskulut ja ostajan riski.</p></div></details>
+<details><summary>Miten laatuseula toimii?</summary><div class="body">
+<p>Seula on <b>binäärinen</b>: kohde joko läpäisee <i>kaikki</i> pakolliset kriteerit tai ei ole listalla. Ei pisteytystä, ei kompromisseja — yksikin täyttymätön pakollinen kriteeri pudottaa kohteen. Plussat eivät vaikuta läpäisyyn, vaan järjestävät läpäisseet keskenään.</p>
+<p>Vaiheet: <b>1)</b> haetaan markkina (Oikotie · Etuovi), <b>2)</b> rikastetaan jokainen kohde detaljisivun tiedoilla, <b>3)</b> lasketaan kustannukset ja ostajan riski paikallisesti, <b>4)</b> sovelletaan seula.</p></div></details>
+<details><summary>Miksi juuri nämä kriteerit?</summary><div class="body"><ul>
+<li><b>Yksitasoinen</b> — ei portaita, esteetön ja helppo ylläpitää.</li>
+<li><b>Oma järvenranta</b> — järvi, ei lampi, joki eikä meri; oma rantaviiva, ei pelkkä rantaoikeus.</li>
+<li><b>Kuntoluokka hyvä tai parempi</b> — muuttovalmis, ei remonttiprojekti.</li>
+<li><b>Matala ostajan riski (≤ 25)</b> — vähän lykättyä korjausvelkaa (putket, salaojat, ikärakenteet).</li>
+<li><b>Ympärivuotinen</b> — talviasuttava koti, ei kesämökki.</li>
+<li><b>Oma tontti + toimiva infra</b> — ei vuokratonttia; vesi, viemäri, tie perille, sähkö.</li>
+<li><b>≤ 100 000 € · käteinen</b> — ostetaan ilman lainaa, ilman vastiketta.</li>
+</ul></div></details>
+<details><summary>Asumiskulut — miten lasketaan?</summary><div class="body">
+<p><b>Asumiskulut on kuukausittainen ylläpito yhteensä</b>: lämmitys, sähkö, vakuutus, kiinteistövero ja ylläpito. Ei sisällä lainanlyhennystä eikä vastiketta (käteiskauppa, oma tontti). Lisäksi mallinnetaan <b>20 vuoden kokonaiskustannus</b> (nettonykyarvo), joka sisältää lykätyn korjausvelan. Mallit ovat paikallisia ja deterministisiä — samat luvut joka kerta.</p></div></details>
+<details><summary>Ostajan riski — miten lasketaan?</summary><div class="body">
+<p><b>0–100 pisteen malli</b> arvioi lykätyn korjausvelan ja ikäriskin: rakennusvuosi ja -aika (esim. 1960–85 riskirakenteet), putkiremontin ja salaojien ajankohta, katon ikä, lämmitysmuoto (öljy) ja kuntotarkastuksen olemassaolo. Pienempi on parempi; seula vaatii <b>≤ 25</b>.</p></div></details>
+<details><summary>Mistä tiedot tulevat?</summary><div class="body">
+<p><b>Ilmoitukset:</b> Oikotie ja Etuovi (haetaan kotikoneelta, koska portaalit estävät datakeskusten IP:t). <b>Sijainti &amp; ympäristö:</b> avoin valtion paikkatieto (SYKE, Maanmittauslaitos, OSM). <b>Kustannus- ja riskimallit</b> lasketaan paikallisesti. Kuvat haetaan suoraan alkuperäisen ilmoituksen palvelimelta.</p></div></details>
+<details><summary>Entä mäkärät ja hyttyset?</summary><div class="body">
+<p>Tulossa <b>pehmeänä lisätietona</b>, ei pakollisena kriteerinä: hyttyset arvioidaan seisovan veden ja soiden läheisyydestä (MML suo, SYKE), mäkärät virtaavasta vedestä (SYKE uomaverkosto). Kausi on ~kesä–heinäkuu ja kelivuosi vaihtelee paljon, joten tämä on suuntaa-antava arvio — ei mittaus. Huom: <b>järvivaatimus jo vähentää mäkäriä</b>, koska ne lisääntyvät vain virtaavassa vedessä, ei järven rannalla.</p></div></details>
 </section>
 <div class="grid">${cards || '<p class="m">Ei vielä julkaistuja kohteita.</p>'}</div>
 <footer>Koottu kontulla · luvut virallisista ilmoituksista ja paikallisista kustannusmalleista</footer>
