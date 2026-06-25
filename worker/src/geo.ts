@@ -263,3 +263,190 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
 }
+
+export type BugBand = "matala" | "kohtalainen" | "korkea";
+
+export interface BugIndex {
+  score: number;
+  band: BugBand;
+}
+
+export interface BugPressure {
+  mosquito: BugIndex;
+  blackfly: BugIndex;
+  basis: {
+    open_mire_pct: number;
+    peat_forest_pct: number;
+    lake_pct: number;
+    watercourse_km: number;
+    radius_km: number;
+    latitude: number;
+  };
+  source: string;
+  partial: boolean;
+}
+
+const SYKE_WCS = "https://paikkatiedot.ymparisto.fi/geoserver/inspire_lc/wcs";
+const SYKE_WFS = "https://paikkatiedot.ymparisto.fi/geoserver/inspire_hy/wfs";
+const CLC_BOX_M = 1000;
+const WATERCOURSE_RADIUS_M = 2500;
+
+/** CLC2018 (SYKE) class codes that hold standing water — mosquito breeding habitat. */
+const OPEN_MIRE = new Set([41, 42, 43, 44, 45, 46]);
+const PEAT_FOREST = new Set([24, 26, 29, 35]);
+const LAKE = new Set([48]);
+const SEA = new Set([49]);
+
+const clamp01 = (x: number): number => Math.max(0, Math.min(1, x));
+
+function bandOf(score: number): BugBand {
+  return score < 0.09 ? "matala" : score < 0.28 ? "kohtalainen" : "korkea";
+}
+
+/// Räkkä season worsens northward; mild multiplier anchored at 60–68°N.
+function latitudeFactor(lat: number): number {
+  return 0.85 + 0.35 * clamp01((lat - 60) / 8);
+}
+
+/// WGS84 → ETRS-TM35FIN (EPSG:3067), the CRS SYKE's geodata is served in.
+function wgs84ToTm35fin(lat: number, lon: number): { E: number; N: number } {
+  const a = 6378137.0;
+  const f = 1 / 298.257222101;
+  const k0 = 0.9996;
+  const FE = 500000.0;
+  const lon0 = (27.0 * Math.PI) / 180;
+  const rlat = (lat * Math.PI) / 180;
+  const rlon = (lon * Math.PI) / 180;
+  const n = f / (2 - f);
+  const A = (a / (1 + n)) * (1 + n ** 2 / 4 + n ** 4 / 64);
+  const a1 = n / 2 - (2 * n ** 2) / 3 + (5 * n ** 3) / 16;
+  const a2 = (13 * n ** 2) / 48 - (3 * n ** 3) / 5;
+  const a3 = (61 * n ** 3) / 240;
+  const ep = Math.sqrt(f * (2 - f));
+  const Q = Math.asinh(Math.tan(rlat)) - ep * Math.atanh(ep * Math.sin(rlat));
+  const be = Math.atan(Math.sinh(Q));
+  const eta0 = Math.atanh(Math.cos(be) * Math.sin(rlon - lon0));
+  const xi0 = Math.asin(Math.sin(be) * Math.cosh(eta0));
+  const xi =
+    xi0 +
+    a1 * Math.sin(2 * xi0) * Math.cosh(2 * eta0) +
+    a2 * Math.sin(4 * xi0) * Math.cosh(4 * eta0) +
+    a3 * Math.sin(6 * xi0) * Math.cosh(6 * eta0);
+  const eta =
+    eta0 +
+    a1 * Math.cos(2 * xi0) * Math.sinh(2 * eta0) +
+    a2 * Math.cos(4 * xi0) * Math.sinh(4 * eta0) +
+    a3 * Math.cos(6 * xi0) * Math.sinh(6 * eta0);
+  return { N: A * xi * k0, E: A * eta * k0 + FE };
+}
+
+interface ClcStats {
+  open_mire: number;
+  peat_forest: number;
+  lake: number;
+  sea: number;
+}
+
+/// Sample SYKE Corine Land Cover 2018 over a 2 km box as a plaintext class grid
+/// (avoids a GeoTIFF decoder); fraction of each standing-water habitat class.
+async function clcHabitat(E: number, N: number): Promise<ClcStats | null> {
+  const url =
+    `${SYKE_WCS}?service=WCS&version=2.0.1&request=GetCoverage` +
+    `&coverageId=inspire_lc__LC.LandCoverRaster.2018` +
+    `&subset=E(${E - CLC_BOX_M},${E + CLC_BOX_M})&subset=N(${N - CLC_BOX_M},${N + CLC_BOX_M})` +
+    `&format=text/plain`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return null;
+    const text = await res.text();
+    const lastBracket = text.lastIndexOf("]");
+    const tail = lastBracket >= 0 ? text.slice(lastBracket + 1) : text;
+    const cells = (tail.match(/\d+/g) || [])
+      .map(Number)
+      .filter((v) => v >= 0 && v <= 255 && v !== 255);
+    if (cells.length < 100) return null;
+    const frac = (set: Set<number>): number => cells.filter((v) => set.has(v)).length / cells.length;
+    return { open_mire: frac(OPEN_MIRE), peat_forest: frac(PEAT_FOREST), lake: frac(LAKE), sea: frac(SEA) };
+  } catch (err) {
+    console.warn("clc habitat fetch failed", String(err));
+    return null;
+  }
+}
+
+/// Weighted flowing-water length within radius from SYKE's watercourse network
+/// (blackfly larvae need oxygenated running water); larger channels weigh more.
+async function watercourseKm(E: number, N: number): Promise<number | null> {
+  const r = WATERCOURSE_RADIUS_M;
+  const url =
+    `${SYKE_WFS}?service=WFS&version=2.0.0&request=GetFeature` +
+    `&typeNames=inspire_hy:HY.Network.WatercourseLink&outputFormat=application/json&srsName=EPSG:3067` +
+    `&bbox=${E - r},${N - r},${E + r},${N + r},urn:ogc:def:crs:EPSG::3067&count=400`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { features?: WfsFeature[] };
+    let km = 0;
+    for (const ft of body.features ?? []) {
+      const klass = ft.properties?.uomaluokka;
+      const w = klass === 1 ? 1.0 : klass === 2 ? 0.85 : 0.7;
+      const g = ft.geometry;
+      const lines: number[][][] =
+        g?.type === "MultiLineString"
+          ? (g.coordinates as number[][][])
+          : g?.type === "LineString"
+            ? [g.coordinates as number[][]]
+            : [];
+      for (const line of lines) {
+        const near = line.filter((p) => p.length >= 2 && Math.hypot((p[0] as number) - E, (p[1] as number) - N) <= r);
+        for (let i = 1; i < near.length; i++) {
+          const a = near[i - 1] as number[];
+          const b = near[i] as number[];
+          km += (Math.hypot((b[0] as number) - (a[0] as number), (b[1] as number) - (a[1] as number)) / 1000) * w;
+        }
+      }
+    }
+    return km;
+  } catch (err) {
+    console.warn("watercourse fetch failed", String(err));
+    return null;
+  }
+}
+
+interface WfsFeature {
+  properties?: { uomaluokka?: number };
+  geometry?: { type?: string; coordinates?: unknown };
+}
+
+/**
+ * Soft, informational bug-pressure for a point, from open Finnish geodata:
+ * mosquitoes (hyttyset) from standing water (SYKE CLC mires/wetlands/lakes),
+ * blackflies (mäkärät) from flowing water (SYKE watercourse network), with a
+ * mild northward latitude factor. Never gates a listing. Resilient → null on
+ * total failure; `partial` when one source was unreachable.
+ */
+export async function bugPressure(lat: number, lon: number): Promise<BugPressure | null> {
+  const { E, N } = wgs84ToTm35fin(lat, lon);
+  const [clc, water] = await Promise.all([clcHabitat(E, N), watercourseKm(E, N)]);
+  if (clc == null && water == null) return null;
+  const lf = latitudeFactor(lat);
+
+  const habitat = clc ? clc.open_mire * 1.0 + clc.peat_forest * 0.45 + clc.lake * 0.3 + clc.sea * 0.15 : 0;
+  const mosquitoScore = clamp01(habitat) * lf;
+  const blackflyScore = clamp01((water ?? 0) / 3.0) * lf;
+  const pct = (x: number): number => Math.round(x * 1000) / 10;
+
+  return {
+    mosquito: { score: Math.round(mosquitoScore * 100) / 100, band: bandOf(mosquitoScore) },
+    blackfly: { score: Math.round(blackflyScore * 100) / 100, band: bandOf(blackflyScore) },
+    basis: {
+      open_mire_pct: clc ? pct(clc.open_mire) : 0,
+      peat_forest_pct: clc ? pct(clc.peat_forest) : 0,
+      lake_pct: clc ? pct(clc.lake) : 0,
+      watercourse_km: Math.round((water ?? 0) * 100) / 100,
+      radius_km: WATERCOURSE_RADIUS_M / 1000,
+      latitude: Math.round(lat * 1000) / 1000,
+    },
+    source: "SYKE Corine Land Cover 2018 + uomaverkosto (avoin paikkatieto)",
+    partial: clc == null || water == null,
+  };
+}

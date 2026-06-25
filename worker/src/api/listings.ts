@@ -35,8 +35,10 @@ import {
   deletePhotosFrom,
   upsertPublishedPage,
   deletePublishedPage,
+  getPublishedPage,
   type ListingsFilter,
 } from "../db";
+import { bugPressure } from "../geo";
 import { crawlTick } from "../crawl";
 import { enrichBatch } from "../geo";
 import {
@@ -118,8 +120,22 @@ api.post("/publish", async (c) => {
   if (body.tier !== "gate") {
     return c.json({ ok: false, skipped: "only algorithm-validated (gate) listings are published" }, 422);
   }
-  await upsertPublishedPage(c.env.DB, id, body.tier, JSON.stringify(body.payload));
+  const payload = await withBugPressure(body.payload);
+  await upsertPublishedPage(c.env.DB, id, body.tier, JSON.stringify(payload));
   return c.json({ ok: true, id, path: `/kontu/${id}` });
+});
+
+/// Re-derive the open-geodata bug-pressure for an already-published page (used to
+/// backfill pages published before the signal existed). Token-guarded like /publish.
+api.post("/publish/:id/reenrich", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) return c.json({ error: "bad id" }, 400);
+  const raw = await getPublishedPage(c.env.DB, id);
+  if (!raw) return c.json({ error: "not found" }, 404);
+  const payload = JSON.parse(raw) as Record<string, unknown>;
+  const enriched = await withBugPressure(payload, true);
+  await upsertPublishedPage(c.env.DB, id, "gate", JSON.stringify(enriched));
+  return c.json({ ok: true, id, bug_pressure: (enriched as Record<string, unknown>).bug_pressure });
 });
 
 api.delete("/publish/:id", async (c) => {
@@ -128,6 +144,22 @@ api.delete("/publish/:id", async (c) => {
   await deletePublishedPage(c.env.DB, id);
   return c.json({ ok: true });
 });
+
+/// Merge a soft bug-pressure signal into a publish payload from its coordinates.
+/// Best-effort: never throws, leaves the payload untouched on failure.
+async function withBugPressure(payload: unknown, force = false): Promise<unknown> {
+  if (payload == null || typeof payload !== "object") return payload;
+  const p = payload as Record<string, unknown>;
+  if (!force && p.bug_pressure != null) return p;
+  if (typeof p.lat === "number" && typeof p.lon === "number") {
+    try {
+      p.bug_pressure = await bugPressure(p.lat, p.lon);
+    } catch (err) {
+      console.warn("bugPressure enrich failed", String(err));
+    }
+  }
+  return p;
+}
 
 api.get("/properties/:id", async (c) => {
   const id = Number(c.req.param("id"));

@@ -51,6 +51,20 @@ export interface PublishedPayload {
   reasons: string[];
   tier: "gate" | "near_miss" | "pin";
   published_at: string;
+  bug_pressure?: {
+    mosquito: { score: number; band: string };
+    blackfly: { score: number; band: string };
+    basis: {
+      open_mire_pct: number;
+      peat_forest_pct: number;
+      lake_pct: number;
+      watercourse_km: number;
+      radius_km: number;
+      latitude: number;
+    };
+    source: string;
+    partial: boolean;
+  } | null;
 }
 
 const esc = (s: string): string =>
@@ -95,6 +109,38 @@ function riskFi(label: string): string {
 function bandFi(band: string): string {
   const m: Record<string, string> = { low: "matala", moderate: "kohtalainen", high: "korkea", severe: "vakava" };
   return m[band.toLowerCase()] ?? band;
+}
+
+const dec = (n: number): string => String(n).replace(".", ",");
+
+/** Soft, informational bug-pressure card (hyttyset / mäkärät) from open SYKE
+ *  geodata. Never gates — purely a comfort signal. Omitted when unavailable. */
+function renderBugPressure(bp: PublishedPayload["bug_pressure"]): string {
+  if (!bp) return "";
+  const b = bp.basis;
+  const row = (label: string, ix: { band: string }, tip: string): string =>
+    `<div class="bugrow"><span class="buglabel">${label} ${info(tip)}</span><span class="bugband b-${esc(ix.band)}">${esc(ix.band)}</span></div>`;
+  return `<section class="card"><h2>Hyttyset &amp; mäkärät ${info(
+    "Pehmeä, suuntaa-antava arvio avoimesta paikkatiedosta — EI vaikuta laatuseulaan eikä karsi kohteita. Hyttyskausi painottuu kesä–heinäkuuhun ja vaihtelee vuosittain sään mukaan.",
+  )}</h2>
+  ${row(
+    "Hyttyset (seisova vesi)",
+    bp.mosquito,
+    "Hyttyset lisääntyvät seisovassa vedessä — soissa, kosteikoissa ja matalilla rannoilla. Arvioitu SYKE Corine -maanpeitteestä 2 km alueelta: avosoiden ja kosteikoiden, turvemaan metsien sekä järvialan osuudesta.",
+  )}
+  ${row(
+    "Mäkärät (virtaava vesi)",
+    bp.blackfly,
+    `Mäkärät lisääntyvät virtaavassa, hapekkaassa vedessä — puroissa ja joissa. Arvioitu SYKE:n uomaverkostosta ${dec(b.radius_km)} km säteellä. Järvenranta (ei jokirantaa) pitää tämän tyypillisesti matalana.`,
+  )}
+  <p class="bugbasis">Perusteena 2 km alueelta: avosoita &amp; kosteikkoja ${dec(b.open_mire_pct)} %, turvemaan metsää ${dec(
+    b.peat_forest_pct,
+  )} %, järveä ${dec(b.lake_pct)} %; virtaavaa vettä ${dec(b.watercourse_km)} km (${dec(
+    b.radius_km,
+  )} km säteellä).<br>Lähde: ${esc(bp.source)}.${
+    bp.partial ? " Mittaus osittainen — toinen lähde ei juuri nyt vastannut." : ""
+  }</p>
+  </section>`;
 }
 
 /** Critical facts the listing prose buries — surfaced structured-field-first, then
@@ -304,7 +350,12 @@ footer{color:var(--mut);font-size:.85rem;text-align:center;margin-top:2.8rem;pad
 <details><summary>Mistä tiedot tulevat?</summary><div class="body">
 <p><b>Ilmoitukset:</b> Oikotie ja Etuovi (haetaan kotikoneelta, koska portaalit estävät datakeskusten IP:t). <b>Sijainti &amp; ympäristö:</b> avoin valtion paikkatieto (SYKE, Maanmittauslaitos, OSM). <b>Kustannus- ja riskimallit</b> lasketaan paikallisesti. Kuvat haetaan suoraan alkuperäisen ilmoituksen palvelimelta.</p></div></details>
 <details><summary>Entä mäkärät ja hyttyset?</summary><div class="body">
-<p>Tulossa <b>pehmeänä lisätietona</b>, ei pakollisena kriteerinä: hyttyset arvioidaan seisovan veden ja soiden läheisyydestä (MML suo, SYKE), mäkärät virtaavasta vedestä (SYKE uomaverkosto). Kausi on ~kesä–heinäkuu ja kelivuosi vaihtelee paljon, joten tämä on suuntaa-antava arvio — ei mittaus. Huom: <b>järvivaatimus jo vähentää mäkäriä</b>, koska ne lisääntyvät vain virtaavassa vedessä, ei järven rannalla.</p></div></details>
+<p>Lasketaan <b>pehmeänä lisätietona</b> — ei pakollisena kriteerinä, ei karsi kohteita. Jokaiselle kohteelle arvioidaan kaksi erillistä indeksiä koordinaateista avoimesta paikkatiedosta:</p>
+<ul>
+<li><b>Hyttyset</b> seisovasta vedestä: <b>SYKE Corine -maanpeite 2018</b> (avosuot, kosteikot, turvemaan metsät ja järviala 2 km alueelta).</li>
+<li><b>Mäkärät</b> virtaavasta vedestä: <b>SYKE:n uomaverkosto</b> (purojen ja jokien määrä 2,5 km säteellä).</li>
+</ul>
+<p>Lisäksi lievä pohjoisuuskorjaus (räkkä pahenee pohjoiseen). Tulos näkyy kohdesivulla matala/kohtalainen/korkea -bändinä. Huom: <b>järvivaatimus jo vähentää mäkäriä</b> — ne lisääntyvät vain virtaavassa vedessä, ei järvenrannalla. Kausi painottuu kesä–heinäkuuhun ja vaihtelee sään mukaan, joten tämä on suuntaa-antava arvio, ei mittaus. <i>(Tarkkuutta voi nostaa MML:n suo-aineistolla ilmaisella API-avaimella.)</i></p></div></details>
 </section>
 <div class="grid">${cards || '<p class="m">Ei vielä julkaistuja kohteita.</p>'}</div>
 <footer>Koottu kontulla · luvut virallisista ilmoituksista ja paikallisista kustannusmalleista</footer>
@@ -426,6 +477,8 @@ export function renderListingPage(p: PublishedPayload, origin: string): string {
          <a class="maplink" href="https://www.openstreetmap.org/?mlat=${p.lat}&mlon=${p.lon}#map=13/${p.lat}/${p.lon}" target="_blank" rel="noopener">Avaa isompi kartta →</a></section>`
       : "";
 
+  const bugs = renderBugPressure(p.bug_pressure);
+
   const description = p.description
     ? `<section class="card"><h2>Kuvaus</h2><p class="desc">${esc(p.description)}</p></section>`
     : "";
@@ -521,6 +574,14 @@ h2{display:flex;justify-content:space-between;align-items:baseline;gap:.6rem;fon
 .nearby .nb:last-child{border-bottom:0}
 .nearby .nbk{color:#d4dac9}.nearby .nbd{color:var(--mut);font-variant-numeric:tabular-nums;white-space:nowrap}
 .maplink{display:inline-block;margin-top:.9rem;text-decoration:none}
+.bugrow{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:.6rem 0;border-bottom:1px solid var(--line)}
+.bugrow:last-of-type{border-bottom:0}
+.buglabel{color:#d4dac9}
+.bugband{font-weight:700;font-size:.8rem;padding:.22rem .7rem;border-radius:999px;text-transform:capitalize;white-space:nowrap}
+.b-matala{background:rgba(63,174,111,.16);color:#7fd6a3}
+.b-kohtalainen{background:rgba(216,161,58,.18);color:#e3b65f}
+.b-korkea{background:rgba(224,90,74,.18);color:#ef9b8f}
+.bugbasis{color:var(--mut);font-size:.82rem;margin:.8rem 0 0;line-height:1.55}
 .muted{color:var(--mut)}
 .src{display:block;margin:1.4rem 1.5rem 0}
 .src a{display:block;text-align:center;background:var(--cream);color:#10130f;font-weight:700;padding:1rem;border-radius:14px;text-decoration:none;transition:transform .12s,filter .12s}
@@ -571,6 +632,7 @@ ${dataSection("Sijainti & ympäristö", locFacts)}
   }</section>
 ${description}
 ${map}
+${bugs}
 <div class="src"><a href="${esc(p.source_url)}" target="_blank" rel="noopener">Avaa alkuperäinen ilmoitus →</a></div>
 <div class="foot"><a href="${origin}/kontu">← Kaikki validoidut kohteet</a><br><br>Koottu kontulla — luvut virallisesta ilmoituksesta ja paikallisista kustannusmalleista. Kuvat: alkuperäinen ilmoitus.</div>
 </div>
