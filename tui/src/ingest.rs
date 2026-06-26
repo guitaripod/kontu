@@ -377,12 +377,21 @@ pub async fn pull_oikotie(
         Some(m) => Some(resolve_location(&http, &session, m).await?),
         None => None,
     };
-    // Tontit (plots) are a separate Oikotie card category (cardType 104) and carry
-    // no residential buildingType, so skip the building-type filter for them.
-    let is_tontti = property_types.iter().any(|t| t.to_lowercase().contains("tontti"));
-    let card_type = if is_tontti { 104 } else { 100 };
-    let codes = if is_tontti { Vec::new() } else { building_type_codes(property_types) };
-    let mut cards = fetch_cards(&http, &session, loc, &codes, card_type, shore, price_max, limit).await?;
+    // Tontit (plots) are a separate Oikotie card category (cardType 104) with no
+    // residential buildingType. Houses use cardType 100. Pull whichever the spec
+    // asks for — possibly both, merged.
+    let want_tontti = property_types.iter().any(|t| t.to_lowercase().contains("tontti"));
+    let house_types: Vec<String> =
+        property_types.iter().filter(|t| !t.to_lowercase().contains("tontti")).cloned().collect();
+    let pull_houses = property_types.is_empty() || !house_types.is_empty();
+    let mut cards: Vec<Value> = Vec::new();
+    if pull_houses {
+        let codes = building_type_codes(&house_types);
+        cards.extend(fetch_cards(&http, &session, loc.clone(), &codes, 100, shore, price_max, limit).await?);
+    }
+    if want_tontti {
+        cards.extend(fetch_cards(&http, &session, loc.clone(), &[], 104, shore, price_max, limit).await?);
+    }
     if cards.is_empty() {
         return Ok(json!({ "received": 0, "inserted": 0, "updated": 0, "skipped": 0 }));
     }
