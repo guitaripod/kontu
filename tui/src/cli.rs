@@ -1342,6 +1342,32 @@ fn publish_reasons(l: &Listing, tier: &str) -> Vec<String> {
     r
 }
 
+/// Indicative "drop a ready-built home" cost for a plot: land + a modular-home
+/// build estimate + site connections. Null for non-plots.
+fn tontti_estimate(l: &Listing) -> serde_json::Value {
+    let is_tontti = l.property_type.as_deref().map(|t| t.contains("tontti")).unwrap_or(false);
+    if !is_tontti {
+        return serde_json::Value::Null;
+    }
+    let land = l.price_eur.unwrap_or(0) as f64;
+    // A typical move-in home size for the estimate; the plot's actual building right
+    // is shown separately. Capped by building right when it's smaller than typical.
+    let home_m2 = l.building_right_m2.map(|b| b.min(95.0)).unwrap_or(95.0);
+    let rate = 2200.0;
+    let build = (rate * home_m2).round();
+    let municipal = l.water_supply.as_deref().map(|w| w.contains("kunnall")).unwrap_or(false);
+    let connection = if municipal { 18000.0 } else { 32000.0 };
+    json!({
+        "land_eur": land,
+        "home_m2": home_m2,
+        "build_rate_eur_m2": rate,
+        "build_estimate_eur": build,
+        "connection_estimate_eur": connection,
+        "municipal_infra": municipal,
+        "total_estimate_eur": (land + build + connection).round(),
+    })
+}
+
 fn build_publish_payload(
     detail: &ListingDetail,
     assessment: &RiskAssessment,
@@ -1362,6 +1388,7 @@ fn build_publish_payload(
         .first()
         .map(|y| ((y.recurring + y.interest) / 12.0).round())
         .unwrap_or(0.0);
+    let tontti = tontti_estimate(l);
     json!({
         "id": l.id,
         "title": l.title(),
@@ -1372,6 +1399,9 @@ fn build_publish_payload(
         "holding_form": l.holding_form,
         "living_area_m2": l.living_area_m2,
         "plot_area_m2": l.plot_area_m2,
+        "building_right_m2": l.building_right_m2,
+        "zoning_status": l.zoning_status,
+        "tontti": tontti,
         "year_built": l.year_built,
         "room_count": l.room_count,
         "energy_class": l.energy_class,
