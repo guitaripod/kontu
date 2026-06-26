@@ -1023,31 +1023,38 @@ fn require_telegram(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Fetch the candidate listings the spec ranks over. Multi-municipality specs are
-/// fetched per area and merged so a cheapest-nationwide truncation can't drop them.
+/// Fetch the candidate listings the spec ranks over. Fetched per
+/// (municipality × property_type) and merged, so a cheapest-N truncation can
+/// never drop a relevant listing — e.g. a flood of cheap plots can't crowd out
+/// houses, and one municipality can't crowd out another.
 async fn fetch_spec_listings(client: &KontuClient, spec: &Spec, scan: usize) -> Result<Vec<Listing>> {
-    let mut filter = spec_to_filter(spec);
-    if spec.municipalities.len() >= 2 {
-        let mut all = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for m in &spec.municipalities {
-            filter.municipality = Some(m.clone());
-            let page = client
-                .list_listings(&filter, SortColumn::Price, false, scan as u32, 0)
-                .await?;
+    let base = spec_to_filter(spec);
+    let munis: Vec<Option<String>> = if spec.municipalities.is_empty() {
+        vec![None]
+    } else {
+        spec.municipalities.iter().map(|m| Some(m.clone())).collect()
+    };
+    let types: Vec<Option<String>> = if spec.property_types.is_empty() {
+        vec![None]
+    } else {
+        spec.property_types.iter().map(|t| Some(t.clone())).collect()
+    };
+    let mut all = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for m in &munis {
+        for t in &types {
+            let mut f = base.clone();
+            f.municipality = m.clone();
+            f.property_type = t.clone();
+            let page = client.list_listings(&f, SortColumn::Price, false, scan as u32, 0).await?;
             for l in page.listings {
                 if seen.insert(l.id) {
                     all.push(l);
                 }
             }
         }
-        Ok(all)
-    } else {
-        Ok(client
-            .list_listings(&filter, SortColumn::Price, false, scan as u32, 0)
-            .await?
-            .listings)
     }
+    Ok(all)
 }
 
 /// Ensure every pinned listing is in the candidate set even if it falls outside
