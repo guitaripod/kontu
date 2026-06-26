@@ -334,35 +334,6 @@ fn pref_signal(pref: Pref, signal: f64) -> f64 {
     }
 }
 
-fn is_tontti(l: &Listing) -> bool {
-    fold_ascii(l.property_type.as_deref().unwrap_or("")).contains("tontti")
-}
-
-fn own_lake_shore(l: &Listing) -> bool {
-    l.shore.as_deref().map(|s| s.contains("oma_ranta")).unwrap_or(false)
-        && l
-            .water_body
-            .as_deref()
-            .map(|w| {
-                let w = w.to_lowercase();
-                !(w.contains("joki") || w.contains("lampi") || w.contains("meri"))
-            })
-            .unwrap_or(true)
-}
-
-/// A plot you can realistically drop a home on: explicit building right, a real
-/// plan (not "kaavoittamaton"/none), or clear buildable wording in the text.
-fn is_buildable_tontti(l: &Listing) -> bool {
-    if l.building_right_m2.map(|b| b > 0.0).unwrap_or(false) {
-        return true;
-    }
-    let z = l.zoning_status.as_deref().unwrap_or("").to_lowercase();
-    if !z.is_empty() && !z.contains("kaavoittamaton") {
-        return true;
-    }
-    is_buildable_plot(l, &l.description.as_deref().unwrap_or("").to_lowercase())
-}
-
 fn passes_hard(spec: &Spec, l: &Listing, s: &Signals) -> bool {
     if let Some(max) = spec.price_max
         && l.price_eur.map(|p| p > max).unwrap_or(true) {
@@ -423,15 +394,6 @@ fn passes_hard(spec: &Spec, l: &Listing, s: &Signals) -> bool {
             .unwrap_or(false)
     {
         return false;
-    }
-    // Plots (tontit) have no building, so the house-only checks below (winterized,
-    // condition, single-floor, infra) don't apply. A buildable own-lake plot is the
-    // whole point — gate on those and stop here.
-    if is_tontti(l) {
-        if matches!(spec.shore, Pref::Required) && !own_lake_shore(l) {
-            return false;
-        }
-        return is_buildable_tontti(l);
     }
     if pref_excludes(spec.shore, s.shore)
         || pref_excludes(spec.ev_charging, s.ev)
@@ -521,10 +483,7 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
             continue;
         }
         let assessment = risk::assess(&l.to_risk_input(s.shore >= PRESENT), 2026);
-        // The risk model scores a building's deferred capex, which a bare plot has
-        // none of — so a plot that clears the hard gate is in, no risk ceiling.
-        let within_gate =
-            passes && (is_tontti(&l) || spec.max_risk.map(|m| assessment.score <= m).unwrap_or(true));
+        let within_gate = passes && spec.max_risk.map(|m| assessment.score <= m).unwrap_or(true);
         let within_near = passes
             && !within_gate
             && confirmed_sound(&l)

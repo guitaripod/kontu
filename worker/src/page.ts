@@ -16,17 +16,6 @@ export interface PublishedPayload {
   holding_form: string | null;
   living_area_m2: number | null;
   plot_area_m2: number | null;
-  building_right_m2?: number | null;
-  zoning_status?: string | null;
-  tontti?: {
-    land_eur: number;
-    home_m2: number;
-    build_rate_eur_m2: number;
-    build_estimate_eur: number;
-    connection_estimate_eur: number;
-    municipal_infra: boolean;
-    total_estimate_eur: number;
-  } | null;
   year_built: number | null;
   room_count: number | null;
   energy_class: string | null;
@@ -82,8 +71,6 @@ const esc = (s: string): string =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 const thousands = (n: number): string => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-
-const isTontti = (p: PublishedPayload): boolean => (p.property_type ?? "").toLowerCase().includes("tontti");
 
 const eur = (n: number | null | undefined): string => (n == null ? "—" : `${thousands(n)} €`);
 
@@ -269,68 +256,45 @@ export function renderIndexPage(
   origin: string,
   market?: { scanned: number; municipalities: number; unread?: number; updated: number | null },
 ): string {
-  const gate = items
-    .filter((p) => p.tier === "gate" && !isTontti(p))
-    .sort((a, b) => (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9));
+  const gate = items.filter((p) => p.tier === "gate").sort((a, b) => (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9));
   const almost = items
-    .filter((p) => (p.tier === "near_miss" || p.tier === "pin") && !isTontti(p))
+    .filter((p) => p.tier === "near_miss" || p.tier === "pin")
     .sort(
       (a, b) =>
         (a.tier === "pin" ? 0 : 1) - (b.tier === "pin" ? 0 : 1) ||
         a.risk.score - b.risk.score ||
         (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9),
     );
-  const plots = items.filter(isTontti).sort((a, b) => (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9));
   const cardOf = (p: PublishedPayload): string => {
     const cover = p.gallery[0] ?? "";
     const place = p.municipality ?? p.title ?? `#${p.id}`;
-    const tontti = isTontti(p);
+    const monthly = Math.round(p.cost.monthly_living);
     const isGate = p.tier === "gate";
-    const tag = tontti
-      ? `<span class="tag plot">Tontti</span>`
-      : isGate
-        ? ""
-        : p.tier === "pin"
-          ? `<span class="tag pin">★ Suosikki</span>`
-          : `<span class="tag near">Melkein</span>`;
-    let metaRight: string;
-    let facts: string;
-    if (tontti) {
-      const move = p.tontti?.total_estimate_eur;
-      metaRight = move ? `~${thousands(move)} € valmiina` : "rakennustontti";
-      facts = [
-        area(p.plot_area_m2),
-        p.building_right_m2 ? `rak.oik. ${thousands(p.building_right_m2)} m²` : "",
-        p.zoning_status ?? "",
-      ]
-        .filter((x) => x && x !== "—")
-        .map(esc)
-        .join(" · ");
-    } else {
-      metaRight = `${thousands(Math.round(p.cost.monthly_living))} €/kk · riski ${p.risk.score}`;
-      facts = [
-        p.living_area_m2 != null ? `${thousands(p.living_area_m2)} m²` : "",
-        area(p.plot_area_m2),
-        p.year_built != null ? String(p.year_built) : "",
-        p.condition_class ?? "",
-      ]
-        .filter((x) => x && x !== "—")
-        .map(esc)
-        .join(" · ");
-    }
-    return `<a class="tile${tontti ? " plot" : isGate ? "" : " almost"}" href="${origin}/kontu/${p.id}">
-        <div class="thumb">${cover ? `<img src="${esc(cover)}" loading="${isGate && !tontti ? "eager" : "lazy"}" decoding="async" alt="" referrerpolicy="no-referrer">` : ""}${tag}</div>
+    const tag = isGate
+      ? ""
+      : p.tier === "pin"
+        ? `<span class="tag pin">★ Suosikki</span>`
+        : `<span class="tag near">Melkein</span>`;
+    const facts = [
+      p.living_area_m2 != null ? `${thousands(p.living_area_m2)} m²` : "",
+      area(p.plot_area_m2),
+      p.year_built != null ? String(p.year_built) : "",
+      p.condition_class ?? "",
+    ]
+      .filter((x) => x && x !== "—")
+      .map(esc)
+      .join(" · ");
+    return `<a class="tile${isGate ? "" : " almost"}" href="${origin}/kontu/${p.id}">
+        <div class="thumb">${cover ? `<img src="${esc(cover)}" loading="${isGate ? "eager" : "lazy"}" decoding="async" alt="" referrerpolicy="no-referrer">` : ""}${tag}</div>
         <div class="meta"><div class="place">${esc(place)}</div>
-          <div class="row"><span class="p">${eur(p.price_eur)}</span><span class="m">${esc(metaRight)}</span></div>
+          <div class="row"><span class="p">${eur(p.price_eur)}</span><span class="m">${thousands(monthly)} €/kk · riski ${p.risk.score}</span></div>
           <div class="facts2">${facts}</div>
         </div></a>`;
   };
   const gateCards = gate.map(cardOf).join("");
   const almostCards = almost.map(cardOf).join("");
-  const plotCards = plots.map(cardOf).join("");
   const n = gate.length;
   const almostN = almost.length;
-  const plotsN = plots.length;
   const scanned = market?.scanned ?? n;
   const munis = market?.municipalities ?? 0;
   const unread = market?.unread ?? 0;
@@ -395,8 +359,6 @@ header p{color:var(--mut);margin:.25rem 0 0}
 .tag{position:absolute;top:.6rem;left:.6rem;z-index:2;font-size:.7rem;font-weight:700;padding:.28rem .6rem;border-radius:8px;letter-spacing:.02em;background:rgba(12,15,11,.72);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
 .tag.near{color:#e3b65f}
 .tag.pin{color:#7fd6a3}
-.tag.plot{color:#8fc2e6}
-.tile.plot:hover{border-color:#6fa8d8}
 .sechead{margin:2.3rem 0 1rem}
 .almostlede{margin:-.3rem 0 1.2rem;color:var(--mut);font-size:.92rem;line-height:1.55;max-width:64ch}
 .almostlede b{color:var(--ink2)}
@@ -462,13 +424,6 @@ ${
     ? `<h2 class="exh sechead">Melkein läpäisi · ${almostN}</h2>
 <p class="almostlede">Nämä täyttävät <b>kaikki pakolliset kriteerit</b> ja kunto on vahvistettu hyväksi — vain mallinnettu <b>ostajan riski</b> ylittää seulan tiukan ≤25 rajan. Eivät siis validoituja, mutta varteenotettavia.</p>
 <div class="grid">${almostCards}</div>`
-    : ""
-}
-${
-  plotsN
-    ? `<h2 class="exh sechead">Tontit · ${plotsN}</h2>
-<p class="almostlede">Rakennusvalmiit <b>oman järvenrannan tontit</b>, joille voi pudottaa valmistalon. Samat sijaintikriteerit kuin taloissa (oma järviranta, oma tontti, rakennusoikeus) — talon kunto/ikä eivät päde. Hinnan vieressä karkea arvio <b>muuttovalmiista</b> kokonaisuudesta.</p>
-<div class="grid">${plotCards}</div>`
     : ""
 }
 <footer>Koottu kontulla · luvut virallisista ilmoituksista ja paikallisista kustannusmalleista</footer>
@@ -561,40 +516,6 @@ export function renderListingPage(p: PublishedPayload, origin: string): string {
     ${annualBits ? `<div class="costnote">Sisältää mm. ${esc(annualBits)}</div>` : ""}
     <div class="grid costgrid">${priceRows}</div>
   </section>`;
-
-  const t = p.tontti ?? null;
-  const tonttiCostSection = t
-    ? `<section class="card"><h2>Muuttovalmiiksi — arvio ${info(
-        `Karkea kokonaisarvio: tontin hinta + valmistalon rakennuskustannus + liittymät ja perustukset. Rakennuskustannus vaihtelee paljon talon mukaan (~${t.build_rate_eur_m2} €/m² × ${t.home_m2} m² esimerkkinä). Suuntaa-antava, ei tarjous.`,
-      )}</h2>
-    <div class="costhero">
-      <div class="costbig">≈ ${thousands(t.total_estimate_eur)} €</div>
-      <div class="costlbl"><b>kun valmistalo on pystyssä</b><br><span class="costfine">tontti + rakentaminen + liittymät & perustukset — käteisellä, ei lainaa</span></div>
-    </div>
-    <div class="grid costgrid">${[
-      fact("Tontin hinta", eur(t.land_eur)),
-      fact(`Valmistalo (~${t.home_m2} m²)`, `~${thousands(t.build_estimate_eur)} €`, `Esimerkki ~${t.build_rate_eur_m2} €/m². Vaihtelee paljon talotyypin ja varustelun mukaan.`),
-      fact(
-        "Liittymät & perustukset",
-        `~${thousands(t.connection_estimate_eur)} €`,
-        t.municipal_infra ? "Kunnallistekniikka saatavilla — edullisempi liittyä." : "Oma kaivo + jätevesijärjestelmä + sähköliittymä + perustukset.",
-      ),
-    ].join("")}</div>
-  </section>`
-    : "";
-  const tonttiFacts = [
-    fact("Tontin pinta-ala", area(p.plot_area_m2)),
-    fact(
-      "Rakennusoikeus",
-      p.building_right_m2 != null ? `${thousands(p.building_right_m2)} k-m²` : "—",
-      "Sallittu rakentamisen määrä kerrosneliömetreinä — kuinka iso talo tontille saadaan rakentaa.",
-    ),
-    fact(
-      "Kaavatilanne",
-      p.zoning_status ?? "—",
-      "Ranta-asemakaava/asemakaava antaa selkeän rakennusoikeuden; yleiskaava ohjaa; kaavoittamaton vaatii poikkeusluvan/suunnittelutarveratkaisun.",
-    ),
-  ].join("");
 
   const dataSection = (heading: string, body: string): string =>
     body ? `<section class="card"><h2>${esc(heading)}</h2><div class="grid">${body}</div></section>` : "";
@@ -777,28 +698,21 @@ ${p.gallery.length > 1 ? `<button class="photocount" id="pcount" type="button">�
   <div class="price">${eur(p.price_eur)}</div>
   ${cashLine}
 </div>
-${
-  t
-    ? `${tonttiCostSection}
-${reasons}
-${dataSection("Tontin tiedot", tonttiFacts)}
-${dataSection("Sijainti & ympäristö", locFacts)}`
-    : `${tierBanner}
+${tierBanner}
 ${costSection}
 ${reasons}
 ${dataSection("Kohteen tiedot", propFacts)}
 ${dataSection("Talotekniikka & infra", infraFacts)}
 ${dataSection("Sijainti & ympäristö", locFacts)}
 <section class="card"><h2><span>Ostajan riski${info(T.riski)}</span> <span class="riskscore">${p.risk.score}/100 · ${esc(
-        bandFi(p.risk.band),
-      )}</span></h2>${riskFlags}${
-        p.risk.deferred_capex_eur > 0
-          ? `<p class="muted" style="margin:.8rem 0 0">Arvioitu lykätty korjausvelka ~${thousands(
-              p.risk.deferred_capex_eur,
-            )} €</p>`
-          : ""
-      }</section>`
-}
+    bandFi(p.risk.band),
+  )}</span></h2>${riskFlags}${
+    p.risk.deferred_capex_eur > 0
+      ? `<p class="muted" style="margin:.8rem 0 0">Arvioitu lykätty korjausvelka ~${thousands(
+          p.risk.deferred_capex_eur,
+        )} €</p>`
+      : ""
+  }</section>
 ${description}
 ${map}
 ${bugs}
