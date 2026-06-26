@@ -275,8 +275,8 @@ export interface BugPressure {
   mosquito: BugIndex;
   blackfly: BugIndex;
   basis: {
-    open_mire_pct: number;
-    peat_forest_pct: number;
+    mire_pct: number;
+    mire_source: string;
     lake_pct: number;
     watercourse_km: number;
     radius_km: number;
@@ -417,6 +417,87 @@ interface WfsFeature {
   geometry?: { type?: string; coordinates?: unknown };
 }
 
+const MML_BASE = "https://avoin-paikkatieto.maanmittauslaitos.fi/maastotiedot/features/v1";
+const MML_CRS3067 = "http://www.opengis.net/def/crs/EPSG/0/3067";
+
+const MML_MIRE_BOX_M = 1000;
+const MIRE_GRID = 24;
+
+/// Authoritative mire/wetland coverage from MML maastotietokanta (suo + soistuma)
+/// as the fraction of the same 2 km box CLC uses. Polygons (EPSG:3067 metres) are
+/// box-clipped by grid-sampling point-in-polygon, so a mire merely touching the
+/// box edge can't inflate the result. Returns null on failure → caller uses CLC.
+async function mmlMireFraction(lat: number, lon: number, key: string): Promise<number | null> {
+  const { E, N } = wgs84ToTm35fin(lat, lon);
+  const r = MML_MIRE_BOX_M;
+  const dLat = r / 111320;
+  const dLon = r / (111320 * Math.cos((lat * Math.PI) / 180));
+  const bbox = `${lon - dLon},${lat - dLat},${lon + dLon},${lat + dLat}`;
+  const polys: number[][][][] = [];
+  let reached = false;
+  for (const coll of ["suo", "soistuma"]) {
+    const url =
+      `${MML_BASE}/collections/${coll}/items?bbox=${bbox}` +
+      `&crs=${encodeURIComponent(MML_CRS3067)}&api-key=${key}&f=json&limit=2000`;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) continue;
+      const body = (await res.json()) as { features?: { geometry?: { type?: string; coordinates?: unknown } }[] };
+      reached = true;
+      for (const f of body.features ?? []) {
+        const g = f.geometry;
+        if (g?.type === "Polygon") polys.push(g.coordinates as number[][][]);
+        else if (g?.type === "MultiPolygon") for (const p of (g.coordinates as number[][][][]) ?? []) polys.push(p);
+      }
+    } catch (err) {
+      console.warn("mml mire fetch failed", coll, String(err));
+    }
+  }
+  if (!reached) return null;
+  if (polys.length === 0) return 0;
+  let inside = 0;
+  let total = 0;
+  for (let i = 0; i <= MIRE_GRID; i++) {
+    for (let j = 0; j <= MIRE_GRID; j++) {
+      const x = E - r + (2 * r * i) / MIRE_GRID;
+      const y = N - r + (2 * r * j) / MIRE_GRID;
+      total++;
+      if (pointInAnyMire(polys, x, y)) inside++;
+    }
+  }
+  return inside / total;
+}
+
+function pointInAnyMire(polys: number[][][][], x: number, y: number): boolean {
+  for (const rings of polys) {
+    if (rings.length === 0 || !pointInRing(rings[0] as number[][], x, y)) continue;
+    let inHole = false;
+    for (let h = 1; h < rings.length; h++) {
+      if (pointInRing(rings[h] as number[][], x, y)) {
+        inHole = true;
+        break;
+      }
+    }
+    if (!inHole) return true;
+  }
+  return false;
+}
+
+/// Ray-casting point-in-ring; coords [x,y] in metres.
+function pointInRing(ring: number[][], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const pi = ring[i] as number[];
+    const pj = ring[j] as number[];
+    const xi = pi[0] as number;
+    const yi = pi[1] as number;
+    const xj = pj[0] as number;
+    const yj = pj[1] as number;
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
 /**
  * Soft, informational bug-pressure for a point, from open Finnish geodata:
  * mosquitoes (hyttyset) from standing water (SYKE CLC mires/wetlands/lakes),
@@ -424,13 +505,24 @@ interface WfsFeature {
  * mild northward latitude factor. Never gates a listing. Resilient → null on
  * total failure; `partial` when one source was unreachable.
  */
-export async function bugPressure(lat: number, lon: number): Promise<BugPressure | null> {
+export async function bugPressure(lat: number, lon: number, mmlKey?: string): Promise<BugPressure | null> {
   const { E, N } = wgs84ToTm35fin(lat, lon);
-  const [clc, water] = await Promise.all([clcHabitat(E, N), watercourseKm(E, N)]);
-  if (clc == null && water == null) return null;
+  const [clc, water, mmlMire] = await Promise.all([
+    clcHabitat(E, N),
+    watercourseKm(E, N),
+    mmlKey ? mmlMireFraction(lat, lon, mmlKey) : Promise.resolve(null),
+  ]);
+  if (clc == null && water == null && mmlMire == null) return null;
   const lf = latitudeFactor(lat);
 
-  const habitat = clc ? clc.open_mire * 1.0 + clc.peat_forest * 0.45 + clc.lake * 0.3 + clc.sea * 0.15 : 0;
+  // Mire/wetland fraction: prefer authoritative MML suo polygons; else the coarser
+  // CLC proxy (open mire + weighted peatland forest).
+  const mireFrac = mmlMire != null ? mmlMire : clc ? clc.open_mire + clc.peat_forest * 0.45 : 0;
+  const lake = clc ? clc.lake : 0;
+  const sea = clc ? clc.sea : 0;
+  const usingMml = mmlMire != null;
+
+  const habitat = mireFrac * 1.0 + lake * 0.3 + sea * 0.15;
   const mosquitoScore = clamp01(habitat) * lf;
   const blackflyScore = clamp01((water ?? 0) / 3.0) * lf;
   const pct = (x: number): number => Math.round(x * 1000) / 10;
@@ -439,14 +531,16 @@ export async function bugPressure(lat: number, lon: number): Promise<BugPressure
     mosquito: { score: Math.round(mosquitoScore * 100) / 100, band: bandOf(mosquitoScore) },
     blackfly: { score: Math.round(blackflyScore * 100) / 100, band: bandOf(blackflyScore) },
     basis: {
-      open_mire_pct: clc ? pct(clc.open_mire) : 0,
-      peat_forest_pct: clc ? pct(clc.peat_forest) : 0,
-      lake_pct: clc ? pct(clc.lake) : 0,
+      mire_pct: pct(mireFrac),
+      mire_source: usingMml ? "MML maastotietokanta (suo)" : "SYKE Corine -maanpeite",
+      lake_pct: pct(lake),
       watercourse_km: Math.round((water ?? 0) * 100) / 100,
       radius_km: WATERCOURSE_RADIUS_M / 1000,
       latitude: Math.round(lat * 1000) / 1000,
     },
-    source: "SYKE Corine Land Cover 2018 + uomaverkosto (avoin paikkatieto)",
-    partial: clc == null || water == null,
+    source: usingMml
+      ? "MML maastotietokanta (suo) + SYKE Corine + uomaverkosto (avoin paikkatieto)"
+      : "SYKE Corine Land Cover 2018 + uomaverkosto (avoin paikkatieto)",
+    partial: water == null || (clc == null && mmlMire == null),
   };
 }

@@ -55,8 +55,8 @@ export interface PublishedPayload {
     mosquito: { score: number; band: string };
     blackfly: { score: number; band: string };
     basis: {
-      open_mire_pct: number;
-      peat_forest_pct: number;
+      mire_pct: number;
+      mire_source: string;
       lake_pct: number;
       watercourse_km: number;
       radius_km: number;
@@ -126,16 +126,18 @@ function renderBugPressure(bp: PublishedPayload["bug_pressure"]): string {
   ${row(
     "Hyttyset (seisova vesi)",
     bp.mosquito,
-    "Hyttyset lisääntyvät seisovassa vedessä — soissa, kosteikoissa ja matalilla rannoilla. Arvioitu SYKE Corine -maanpeitteestä 2 km alueelta: avosoiden ja kosteikoiden, turvemaan metsien sekä järvialan osuudesta.",
+    `Hyttyset lisääntyvät seisovassa vedessä — soissa, kosteikoissa ja matalilla rannoilla. Soiden osuus arvioitu lähteestä ${esc(
+      b.mire_source,
+    )} 2 km alueelta, lisäksi järviala.`,
   )}
   ${row(
     "Mäkärät (virtaava vesi)",
     bp.blackfly,
     `Mäkärät lisääntyvät virtaavassa, hapekkaassa vedessä — puroissa ja joissa. Arvioitu SYKE:n uomaverkostosta ${dec(b.radius_km)} km säteellä. Järvenranta (ei jokirantaa) pitää tämän tyypillisesti matalana.`,
   )}
-  <p class="bugbasis">Perusteena 2 km alueelta: avosoita &amp; kosteikkoja ${dec(b.open_mire_pct)} %, turvemaan metsää ${dec(
-    b.peat_forest_pct,
-  )} %, järveä ${dec(b.lake_pct)} %; virtaavaa vettä ${dec(b.watercourse_km)} km (${dec(
+  <p class="bugbasis">Perusteena 2 km alueelta: soita &amp; kosteikkoja ${dec(b.mire_pct)} % (${esc(
+    b.mire_source,
+  )}), järveä ${dec(b.lake_pct)} %; virtaavaa vettä ${dec(b.watercourse_km)} km (${dec(
     b.radius_km,
   )} km säteellä).<br>Lähde: ${esc(bp.source)}.${
     bp.partial ? " Mittaus osittainen — toinen lähde ei juuri nyt vastannut." : ""
@@ -410,10 +412,10 @@ ${updated || unread ? `<p class="upd">${updated ? `Tiedot päivitetty ${updated}
 <details><summary>Entä mäkärät ja hyttyset?</summary><div class="body">
 <p>Lasketaan <b>pehmeänä lisätietona</b> — ei pakollisena kriteerinä, ei karsi kohteita. Jokaiselle kohteelle arvioidaan kaksi erillistä indeksiä koordinaateista avoimesta paikkatiedosta:</p>
 <ul>
-<li><b>Hyttyset</b> seisovasta vedestä: <b>SYKE Corine -maanpeite 2018</b> (avosuot, kosteikot, turvemaan metsät ja järviala 2 km alueelta).</li>
+<li><b>Hyttyset</b> seisovasta vedestä: <b>MML maastotietokannan suo-aineisto</b> (todelliset suo- ja kosteikkopolygonit 2 km alueelta) sekä järviala.</li>
 <li><b>Mäkärät</b> virtaavasta vedestä: <b>SYKE:n uomaverkosto</b> (purojen ja jokien määrä 2,5 km säteellä).</li>
 </ul>
-<p>Lisäksi lievä pohjoisuuskorjaus (räkkä pahenee pohjoiseen). Tulos näkyy kohdesivulla matala/kohtalainen/korkea -bändinä. Huom: <b>järvivaatimus jo vähentää mäkäriä</b> — ne lisääntyvät vain virtaavassa vedessä, ei järvenrannalla. Kausi painottuu kesä–heinäkuuhun ja vaihtelee sään mukaan, joten tämä on suuntaa-antava arvio, ei mittaus. <i>(Tarkkuutta voi nostaa MML:n suo-aineistolla ilmaisella API-avaimella.)</i></p></div></details>
+<p>Lisäksi lievä pohjoisuuskorjaus (räkkä pahenee pohjoiseen). Tulos näkyy kohdesivulla matala/kohtalainen/korkea -bändinä. Huom: <b>järvivaatimus jo vähentää mäkäriä</b> — ne lisääntyvät vain virtaavassa vedessä, ei järvenrannalla. Kausi painottuu kesä–heinäkuuhun ja vaihtelee sään mukaan, joten tämä on suuntaa-antava arvio, ei mittaus.</p></div></details>
 </section>
 <h2 class="exh sechead">Validoidut · ${n}</h2>
 <div class="grid">${gateCards || '<p class="m">Ei juuri nyt yhtään laatuseulan läpäissyttä kohdetta.</p>'}</div>

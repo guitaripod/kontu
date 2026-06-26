@@ -123,7 +123,7 @@ api.post("/publish", async (c) => {
     return c.json({ ok: false, skipped: "unknown tier (expected gate | near_miss | pin)" }, 422);
   }
   const prior = await getPublishedPage(c.env.DB, id);
-  const payload = await withBugPressure(body.payload, false, prior);
+  const payload = await withBugPressure(body.payload, false, prior, c.env.MML_API_KEY);
   await upsertPublishedPage(c.env.DB, id, tier, JSON.stringify(payload));
   return c.json({ ok: true, id, tier, path: `/kontu/${id}` });
 });
@@ -136,7 +136,7 @@ api.post("/publish/:id/reenrich", async (c) => {
   const raw = await getPublishedPage(c.env.DB, id);
   if (!raw) return c.json({ error: "not found" }, 404);
   const payload = JSON.parse(raw) as Record<string, unknown>;
-  const enriched = await withBugPressure(payload, true);
+  const enriched = await withBugPressure(payload, true, null, c.env.MML_API_KEY);
   await upsertPublishedPage(c.env.DB, id, "gate", JSON.stringify(enriched));
   return c.json({ ok: true, id, bug_pressure: (enriched as Record<string, unknown>).bug_pressure });
 });
@@ -157,7 +157,12 @@ api.delete("/publish/:id", async (c) => {
 
 /// Merge a soft bug-pressure signal into a publish payload from its coordinates.
 /// Best-effort: never throws, leaves the payload untouched on failure.
-async function withBugPressure(payload: unknown, force = false, prior?: string | null): Promise<unknown> {
+async function withBugPressure(
+  payload: unknown,
+  force = false,
+  prior?: string | null,
+  mmlKey?: string,
+): Promise<unknown> {
   if (payload == null || typeof payload !== "object") return payload;
   const p = payload as Record<string, unknown>;
   if (!force && p.bug_pressure != null) return p;
@@ -174,7 +179,7 @@ async function withBugPressure(payload: unknown, force = false, prior?: string |
   }
   if (typeof p.lat === "number" && typeof p.lon === "number") {
     try {
-      p.bug_pressure = await bugPressure(p.lat, p.lon);
+      p.bug_pressure = await bugPressure(p.lat, p.lon, mmlKey);
     } catch (err) {
       console.warn("bugPressure enrich failed", String(err));
     }

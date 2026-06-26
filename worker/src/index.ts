@@ -11,6 +11,7 @@ export interface Env {
   PHOTOS: R2Bucket;
   API_TOKEN: string;
   DIGITRANSIT_KEY?: string;
+  MML_API_KEY?: string;
 }
 
 export const app = new Hono<{ Bindings: Env }>();
