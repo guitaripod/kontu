@@ -31,6 +31,7 @@ export interface ListingRow {
   living_area_m2: number | null;
   total_area_m2: number | null;
   plot_area_m2: number | null;
+  building_right_m2: number | null;
   room_count: number | null;
   room_layout: string | null;
   floors: number | null;
@@ -452,6 +453,7 @@ const LISTING_COLUMNS = [
   "living_area_m2",
   "total_area_m2",
   "plot_area_m2",
+  "building_right_m2",
   "room_count",
   "room_layout",
   "floors",
@@ -517,6 +519,7 @@ function listingValues(n: NormalizedListing, propertyId: number | null, hash: st
     n.living_area_m2,
     n.total_area_m2,
     n.plot_area_m2,
+    n.building_right_m2,
     n.room_count,
     n.room_layout,
     n.floors,
@@ -638,7 +641,7 @@ export async function upsertListing(db: D1Database, n: NormalizedListing): Promi
         "address = ?, municipality = ?, postal_code = ?, district = ?, lat = ?, lon = ?, price_eur = ?, " +
         "debt_free_price_eur = ?, debt_share_eur = ?, price_per_m2 = ?, maintenance_charge_eur = ?, " +
         "financing_charge_eur = ?, ground_rent_eur_yr = ?, living_area_m2 = ?, total_area_m2 = ?, plot_area_m2 = ?, " +
-        "room_count = ?, room_layout = ?, floors = ?, year_built = ?, occupancy_year = ?, " +
+        "building_right_m2 = ?, room_count = ?, room_layout = ?, floors = ?, year_built = ?, occupancy_year = ?, " +
         "roof_year = ?, pipes_renovated_year = ?, water_body = ?, kiinteistovero_eur_yr = ?, electricity_eur_yr = ?, condition_class = ?, " +
         "inspection_status = ?, frame_material = ?, facade_material = ?, roof_material = ?, energy_class = ?, " +
         "e_value = ?, risk_structures = ?, plot_ownership = ?, lease_end_year = ?, shore = ?, shore_sauna = ?, " +
@@ -668,6 +671,7 @@ export async function upsertListing(db: D1Database, n: NormalizedListing): Promi
       n.living_area_m2,
       n.total_area_m2,
       n.plot_area_m2,
+      n.building_right_m2,
       n.room_count,
       n.room_layout,
       n.floors,

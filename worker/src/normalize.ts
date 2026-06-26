@@ -30,6 +30,7 @@ export interface NormalizedListing {
   living_area_m2: number | null;
   total_area_m2: number | null;
   plot_area_m2: number | null;
+  building_right_m2: number | null;
   room_count: number | null;
   room_layout: string | null;
   floors: number | null;
@@ -394,6 +395,9 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     firstString(c["url"], get(c, "links.self")) ??
     (id ? `https://asunnot.oikotie.fi/myytavat-asunnot/${id}` : "https://asunnot.oikotie.fi/");
 
+  // Plots (tontit) are Oikotie cardType 104 under /myytavat-tontit/. Their `size`
+  // field is the PLOT area (not living area), and they carry no building.
+  const isTontti = url.includes("/myytavat-tontit/");
   const description = firstString(c["description"], c["shortDescription"], c["text"]) ?? "";
   const buildingTypeName =
     oikotieBuildingType(get(c, "buildingData.buildingType")) ??
@@ -413,7 +417,7 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     portal: "oikotie",
     portal_listing_id: id,
     url,
-    property_type: normalizePropertyType(buildingTypeName ?? description),
+    property_type: isTontti ? "tontti" : normalizePropertyType(buildingTypeName ?? description),
     holding_form: normalizeHoldingForm(
       firstString(c["holdingType"], c["ownershipType"], get(c, "data.holdingType")),
     ),
@@ -437,9 +441,14 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     maintenance_charge_eur: toInt(c["maintenanceCharge"]),
     financing_charge_eur: toInt(c["financingCharge"]),
     ground_rent_eur_yr: toInt(c["groundRent"]),
-    living_area_m2: toNumber(firstString(c["size"], c["area"], get(c, "data.area"))),
+    living_area_m2: isTontti ? null : toNumber(firstString(c["size"], c["area"], get(c, "data.area"))),
     total_area_m2: toNumber(c["totalArea"]),
-    plot_area_m2: toNumber(firstString(c["sizeLot"], c["plotArea"], c["lotArea"])),
+    plot_area_m2: toNumber(
+      isTontti
+        ? firstString(c["size"], c["sizeLot"], c["plotArea"], c["lotArea"])
+        : firstString(c["sizeLot"], c["plotArea"], c["lotArea"]),
+    ),
+    building_right_m2: null,
     room_count: toNumber(firstString(c["rooms"], c["roomCount"])),
     room_layout: firstString(c["roomConfiguration"], c["roomLayout"]),
     floors: toNumber(firstString(get(c, "buildingData.floorCount"), c["floor"])),
@@ -566,6 +575,16 @@ function pipeRenovationYear(raw: unknown): number | null {
  * (`c.fullDescription`) into the row — these are richer and more reliable than the
  * search-card fields, so detail values win when present.
  */
+/** Parse a Finnish area string ("250 m2.", "7 000 m²", "1,5 ha") to m². */
+function parseAreaM2(s: string | null | undefined): number | null {
+  if (!s) return null;
+  const isHa = /\bha\b/i.test(s);
+  const m = s.replace(/\s/g, "").replace(",", ".").match(/(\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? (isHa ? n * 10000 : n) : null;
+}
+
 function applyOikotieDetail(row: NormalizedListing, c: Record<string, unknown>): void {
   const det = (c["details"] ?? null) as Record<string, unknown> | null;
   const full = firstString(c["fullDescription"]);
@@ -588,6 +607,13 @@ function applyOikotieDetail(row: NormalizedListing, c: Record<string, unknown>):
   if (muni) {
     if (/vesi|vesijohto/i.test(muni)) set("water_supply", "kunnallinen");
     if (/viemär/i.test(muni)) set("sewer_system", "kunnallinen viemäri");
+  }
+  // Tontti (plot) fields: building right, zoning, and an authoritative plot area.
+  set("building_right_m2", parseAreaM2(dv("Rakennusoikeus")));
+  set("zoning_status", firstString(dv("Kaavatilanne"), dv("Kaavoitustilanne"), dv("Kaava")));
+  if (row.property_type === "tontti") {
+    const plotDetail = parseAreaM2(firstString(dv("Tontin pinta-ala"), dv("Kokonaispinta-ala"), dv("Pinta-ala")));
+    if (plotDetail != null) row.plot_area_m2 = plotDetail;
   }
   set("year_built", toInt(dv("Rakennusvuosi")) ?? row.year_built);
   set("kiinteistovero_eur_yr", euroAmount(dv("Kiinteistövero")));
@@ -730,6 +756,7 @@ export function normalizeEtuoviAnnouncement(announcement: unknown): NormalizedLi
     living_area_m2: toNumber(firstString(a["area"], a["livingArea"])),
     total_area_m2: toNumber(firstString(a["totalArea"], a["overallArea"])),
     plot_area_m2: toNumber(firstString(a["lotArea"], a["plotArea"])),
+    building_right_m2: null,
     room_count: leadingInt(a["roomCount"]),
     room_layout: firstString(a["roomStructure"], a["roomLayout"]),
     floors: toNumber(firstString(a["residentialFloorCount"], a["floor"], a["numberOfFloors"])),

@@ -70,6 +70,8 @@ pub struct Listing {
     #[serde(default)]
     pub plot_area_m2: Option<f64>,
     #[serde(default)]
+    pub building_right_m2: Option<f64>,
+    #[serde(default)]
     pub room_count: Option<f64>,
     #[serde(default)]
     pub room_layout: Option<String>,
