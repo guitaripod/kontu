@@ -35,14 +35,8 @@ impl KontuClient {
     }
 
     async fn get_json<T: DeserializeOwned>(&self, path: &str, query: &[(String, String)]) -> Result<T> {
-        let resp = self
-            .http
-            .get(self.url(path))
-            .bearer_auth(&self.token)
-            .query(query)
-            .send()
-            .await
-            .with_context(|| format!("GET {path}"))?;
+        let resp =
+            Self::send_retrying(|| self.http.get(self.url(path)).bearer_auth(&self.token).query(query)).await?;
         Self::parse(resp, path).await
     }
 
@@ -53,6 +47,40 @@ impl KontuClient {
             bail!("{path} -> HTTP {status}: {}", body.chars().take(300).collect::<String>());
         }
         serde_json::from_str(&body).with_context(|| format!("decoding {path} response"))
+    }
+
+    /// Send with up to 3 attempts, backing off on transient failures (timeouts,
+    /// connection errors, 429, 5xx) so a momentary Cloudflare or portal blip
+    /// doesn't abort a whole watch cycle. `make` rebuilds the request per attempt.
+    async fn send_retrying<F>(make: F) -> Result<reqwest::Response>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        let mut delay_ms = 350u64;
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            let last = attempt >= 3;
+            match make().send().await {
+                Ok(resp) => {
+                    let s = resp.status();
+                    if !last && (s.is_server_error() || s.as_u16() == 429) {
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms *= 3;
+                        continue;
+                    }
+                    return Ok(resp);
+                }
+                Err(e) => {
+                    if !last && (e.is_timeout() || e.is_connect() || e.is_request()) {
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms *= 3;
+                        continue;
+                    }
+                    return Err(e).context("sending request");
+                }
+            }
+        }
     }
 
     /// Unauthenticated health probe.
@@ -186,13 +214,9 @@ impl KontuClient {
 
     /// Publish (or refresh) a listing's public web page from a computed snapshot.
     pub async fn publish_page(&self, id: i64, tier: &str, payload: serde_json::Value) -> Result<()> {
-        let resp = self
-            .http
-            .post(self.url("/api/publish"))
-            .bearer_auth(&self.token)
-            .json(&json!({ "id": id, "tier": tier, "payload": payload }))
-            .send()
-            .await?;
+        let body = json!({ "id": id, "tier": tier, "payload": payload });
+        let resp =
+            Self::send_retrying(|| self.http.post(self.url("/api/publish")).bearer_auth(&self.token).json(&body)).await?;
         let _: serde_json::Value = Self::parse(resp, "publish_page").await?;
         Ok(())
     }

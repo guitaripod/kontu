@@ -924,7 +924,7 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
     let listings = fetch_spec_listings(client, &spec, a.scan).await?;
     let matches: Vec<_> = crate::matching::rank(&spec, listings, &defaults)
         .into_iter()
-        .filter(|m| !m.pinned && m.score >= fit_floor)
+        .filter(|m| m.score >= fit_floor)
         .collect();
 
     let mut seen = watch::load_seen()?;
@@ -937,26 +937,41 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
         return Ok(());
     }
 
-    let fresh: Vec<_> = matches.iter().filter(|m| !m.near_miss && !seen.contains(&m.id)).collect();
-    let mut sent = 0usize;
+    let mut published = 0usize;
+    let mut alerted = 0usize;
     let mut failed = 0usize;
-    for m in &fresh {
-        match publish_and_alert(client, &cfg, m, &defaults, spec.horizon_years).await {
+    for m in &matches {
+        let tier = if m.pinned {
+            "pin"
+        } else if m.near_miss {
+            "near_miss"
+        } else {
+            "gate"
+        };
+        let do_alert = tier == "gate" && !seen.contains(&m.id);
+        match publish_listing(client, &cfg, m, &defaults, spec.horizon_years, tier, do_alert).await {
             Ok(()) => {
-                sent += 1;
-                seen.insert(m.id);
+                published += 1;
+                if do_alert {
+                    alerted += 1;
+                    seen.insert(m.id);
+                }
             }
             Err(e) => {
                 failed += 1;
-                eprintln!("kontu: publish/alert failed for {}: {e}", m.id);
+                eprintln!("kontu: publish failed for {}: {e}", m.id);
             }
         }
     }
     watch::save_seen(&seen)?;
     if json {
-        emit(&json!({ "checked": matches.len(), "new": fresh.len(), "sent": sent, "failed": failed }))
+        emit(&json!({ "checked": matches.len(), "published": published, "alerted": alerted, "failed": failed }))
     } else {
-        println!("checked {} matches · {} new · {sent} alerted{}", matches.len(), fresh.len(), if failed > 0 { format!(" · {failed} failed") } else { String::new() });
+        println!(
+            "checked {} matches · {published} published · {alerted} alerted{}",
+            matches.len(),
+            if failed > 0 { format!(" · {failed} failed") } else { String::new() }
+        );
         Ok(())
     }
 }
@@ -1214,12 +1229,14 @@ fn apply_spec_financing(cs: &mut CostState) {
 
 /// Publish a newly-validated listing's public web page, then push a Telegram photo
 /// card whose button deep-links into the web app at that listing.
-async fn publish_and_alert(
+async fn publish_listing(
     client: &KontuClient,
     cfg: &Config,
     m: &crate::matching::Scored,
     defaults: &crate::cost::CostDefaults,
     horizon: u32,
+    tier: &str,
+    alert: bool,
 ) -> Result<()> {
     let detail = client.get_listing(m.id).await?;
     let assessment = assess(&detail);
@@ -1229,9 +1246,12 @@ async fn publish_and_alert(
     cs.horizon = horizon;
     let proj = cs.project(defaults);
     let gallery = crate::ingest::fetch_gallery(&detail.listing.url).await;
-    let payload = build_publish_payload(&detail, &assessment, &proj, &gallery, horizon);
-    client.publish_page(m.id, "gate", payload).await?;
+    let payload = build_publish_payload(&detail, &assessment, &proj, &gallery, horizon, tier);
+    client.publish_page(m.id, tier, payload).await?;
 
+    if !alert {
+        return Ok(());
+    }
     let link = format!("{}/kontu/{}", cfg.webapp_url.trim_end_matches('/'), m.id);
     let caption = alert_caption(&detail.listing, m);
     match gallery.first() {
@@ -1272,7 +1292,7 @@ fn alert_caption(l: &Listing, m: &crate::matching::Scored) -> String {
     )
 }
 
-fn publish_reasons(l: &Listing) -> Vec<String> {
+fn publish_reasons(l: &Listing, tier: &str) -> Vec<String> {
     let mut r = Vec::new();
     if let Some(c) = &l.condition_class {
         r.push(format!("Kuntoluokka {c}"));
@@ -1284,7 +1304,11 @@ fn publish_reasons(l: &Listing) -> Vec<String> {
         r.push(format!("Rakennettu {y}"));
     }
     r.push("Käteiskauppa — ei lainaa, ei vastiketta, ei tonttivuokraa".to_string());
-    r.push("Läpäisi kontun laatuseulan".to_string());
+    r.push(if tier == "gate" {
+        "Läpäisi kontun laatuseulan".to_string()
+    } else {
+        "Täyttää kaikki pakolliset kriteerit — vain ostajan riski yli seulan rajan".to_string()
+    });
     r
 }
 
@@ -1294,6 +1318,7 @@ fn build_publish_payload(
     proj: &Projection,
     gallery: &[String],
     horizon: u32,
+    tier: &str,
 ) -> serde_json::Value {
     let l = &detail.listing;
     let lat = l
@@ -1349,8 +1374,8 @@ fn build_publish_payload(
             "deferred_capex_eur": assessment.deferred_capex_eur,
             "flags": assessment.flags.iter().map(|f| json!({ "label": f.label, "points": f.points, "capex_eur": f.capex_eur })).collect::<Vec<_>>(),
         },
-        "reasons": publish_reasons(l),
-        "tier": "gate",
+        "reasons": publish_reasons(l, tier),
+        "tier": tier,
         "published_at": "",
     })
 }

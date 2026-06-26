@@ -115,14 +115,16 @@ api.post("/publish", async (c) => {
   if (!body || !Number.isInteger(id) || body.payload == null) {
     return c.json({ error: "bad request: need { id, payload }" }, 400);
   }
-  // The public site is the algorithm-VALIDATED showcase: only gate-passers are
-  // published. Near-misses and manual pins stay in the CLI, never on the website.
-  if (body.tier !== "gate") {
-    return c.json({ ok: false, skipped: "only algorithm-validated (gate) listings are published" }, 422);
+  // The site shows two tiers: gate-passers (validated) and the near-miss / pinned
+  // "almost" set. Both are published; anything else is rejected.
+  const tier = body.tier ?? "";
+  if (tier !== "gate" && tier !== "near_miss" && tier !== "pin") {
+    return c.json({ ok: false, skipped: "unknown tier (expected gate | near_miss | pin)" }, 422);
   }
-  const payload = await withBugPressure(body.payload);
-  await upsertPublishedPage(c.env.DB, id, body.tier, JSON.stringify(payload));
-  return c.json({ ok: true, id, path: `/kontu/${id}` });
+  const prior = await getPublishedPage(c.env.DB, id);
+  const payload = await withBugPressure(body.payload, false, prior);
+  await upsertPublishedPage(c.env.DB, id, tier, JSON.stringify(payload));
+  return c.json({ ok: true, id, tier, path: `/kontu/${id}` });
 });
 
 /// Re-derive the open-geodata bug-pressure for an already-published page (used to
@@ -147,10 +149,21 @@ api.delete("/publish/:id", async (c) => {
 
 /// Merge a soft bug-pressure signal into a publish payload from its coordinates.
 /// Best-effort: never throws, leaves the payload untouched on failure.
-async function withBugPressure(payload: unknown, force = false): Promise<unknown> {
+async function withBugPressure(payload: unknown, force = false, prior?: string | null): Promise<unknown> {
   if (payload == null || typeof payload !== "object") return payload;
   const p = payload as Record<string, unknown>;
   if (!force && p.bug_pressure != null) return p;
+  if (!force && prior) {
+    try {
+      const old = JSON.parse(prior) as Record<string, unknown>;
+      if (old.bug_pressure != null && old.lat === p.lat && old.lon === p.lon) {
+        p.bug_pressure = old.bug_pressure;
+        return p;
+      }
+    } catch {
+      /* recompute below */
+    }
+  }
   if (typeof p.lat === "number" && typeof p.lon === "number") {
     try {
       p.bug_pressure = await bugPressure(p.lat, p.lon);

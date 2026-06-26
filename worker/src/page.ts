@@ -254,24 +254,45 @@ export function renderIndexPage(
   origin: string,
   market?: { scanned: number; municipalities: number; updated: number | null },
 ): string {
-  const order: Record<string, number> = { gate: 0, near_miss: 1, pin: 2 };
-  const sorted = [...items].sort(
-    (a, b) => (order[a.tier] ?? 9) - (order[b.tier] ?? 9) || (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9),
-  );
-  const cards = sorted
-    .map((p) => {
-      const cover = p.gallery[0] ?? "";
-      const place = p.municipality ?? p.title ?? `#${p.id}`;
-      const monthly = Math.round(p.cost.monthly_living);
-      return `<a class="tile" href="${origin}/kontu/${p.id}">
-        <div class="thumb">${cover ? `<img src="${esc(cover)}" loading="eager" decoding="async" alt="" referrerpolicy="no-referrer">` : ""}</div>
+  const gate = items.filter((p) => p.tier === "gate").sort((a, b) => (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9));
+  const almost = items
+    .filter((p) => p.tier === "near_miss" || p.tier === "pin")
+    .sort(
+      (a, b) =>
+        (a.tier === "pin" ? 0 : 1) - (b.tier === "pin" ? 0 : 1) ||
+        a.risk.score - b.risk.score ||
+        (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9),
+    );
+  const cardOf = (p: PublishedPayload): string => {
+    const cover = p.gallery[0] ?? "";
+    const place = p.municipality ?? p.title ?? `#${p.id}`;
+    const monthly = Math.round(p.cost.monthly_living);
+    const isGate = p.tier === "gate";
+    const tag = isGate
+      ? ""
+      : p.tier === "pin"
+        ? `<span class="tag pin">★ Suosikki</span>`
+        : `<span class="tag near">Melkein</span>`;
+    const facts = [
+      p.living_area_m2 != null ? `${thousands(p.living_area_m2)} m²` : "",
+      area(p.plot_area_m2),
+      p.year_built != null ? String(p.year_built) : "",
+      p.condition_class ?? "",
+    ]
+      .filter((x) => x && x !== "—")
+      .map(esc)
+      .join(" · ");
+    return `<a class="tile${isGate ? "" : " almost"}" href="${origin}/kontu/${p.id}">
+        <div class="thumb">${cover ? `<img src="${esc(cover)}" loading="${isGate ? "eager" : "lazy"}" decoding="async" alt="" referrerpolicy="no-referrer">` : ""}${tag}</div>
         <div class="meta"><div class="place">${esc(place)}</div>
           <div class="row"><span class="p">${eur(p.price_eur)}</span><span class="m">${thousands(monthly)} €/kk · riski ${p.risk.score}</span></div>
-          <div class="facts2">${[p.living_area_m2 != null ? `${thousands(p.living_area_m2)} m²` : "", area(p.plot_area_m2), p.year_built != null ? String(p.year_built) : "", p.condition_class ?? ""].filter((x) => x && x !== "—").map(esc).join(" · ")}</div>
+          <div class="facts2">${facts}</div>
         </div></a>`;
-    })
-    .join("");
-  const n = sorted.length;
+  };
+  const gateCards = gate.map(cardOf).join("");
+  const almostCards = almost.map(cardOf).join("");
+  const n = gate.length;
+  const almostN = almost.length;
   const scanned = market?.scanned ?? n;
   const munis = market?.municipalities ?? 0;
   const updated =
@@ -331,6 +352,13 @@ header p{color:var(--mut);margin:.25rem 0 0}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:1.1rem;align-items:stretch}
 .tile{display:flex;flex-direction:column;height:100%;background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;text-decoration:none;color:inherit;transition:border-color .15s,transform .15s,box-shadow .15s}
 .tile:hover{border-color:var(--green);transform:translateY(-3px);box-shadow:0 10px 26px rgba(0,0,0,.32)}
+.tile.almost:hover{border-color:var(--amber)}
+.tag{position:absolute;top:.6rem;left:.6rem;z-index:2;font-size:.7rem;font-weight:700;padding:.28rem .6rem;border-radius:8px;letter-spacing:.02em;background:rgba(12,15,11,.72);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+.tag.near{color:#e3b65f}
+.tag.pin{color:#7fd6a3}
+.sechead{margin:2.3rem 0 1rem}
+.almostlede{margin:-.3rem 0 1.2rem;color:var(--mut);font-size:.92rem;line-height:1.55;max-width:64ch}
+.almostlede b{color:var(--ink2)}
 .thumb{position:relative;aspect-ratio:3/2;overflow:hidden;background:var(--imgbg)}
 .thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .meta{display:flex;flex-direction:column;flex:1;padding:.85rem .95rem 1rem}
@@ -386,7 +414,15 @@ ${updated ? `<p class="upd">Tiedot päivitetty ${updated} · vain laatuseulan l�
 </ul>
 <p>Lisäksi lievä pohjoisuuskorjaus (räkkä pahenee pohjoiseen). Tulos näkyy kohdesivulla matala/kohtalainen/korkea -bändinä. Huom: <b>järvivaatimus jo vähentää mäkäriä</b> — ne lisääntyvät vain virtaavassa vedessä, ei järvenrannalla. Kausi painottuu kesä–heinäkuuhun ja vaihtelee sään mukaan, joten tämä on suuntaa-antava arvio, ei mittaus. <i>(Tarkkuutta voi nostaa MML:n suo-aineistolla ilmaisella API-avaimella.)</i></p></div></details>
 </section>
-<div class="grid">${cards || '<p class="m">Ei vielä julkaistuja kohteita.</p>'}</div>
+<h2 class="exh sechead">Validoidut · ${n}</h2>
+<div class="grid">${gateCards || '<p class="m">Ei juuri nyt yhtään laatuseulan läpäissyttä kohdetta.</p>'}</div>
+${
+  almostN
+    ? `<h2 class="exh sechead">Melkein läpäisi · ${almostN}</h2>
+<p class="almostlede">Nämä täyttävät <b>kaikki pakolliset kriteerit</b> ja kunto on vahvistettu hyväksi — vain mallinnettu <b>ostajan riski</b> ylittää seulan tiukan ≤25 rajan. Eivät siis validoituja, mutta varteenotettavia.</p>
+<div class="grid">${almostCards}</div>`
+    : ""
+}
 <footer>Koottu kontulla · luvut virallisista ilmoituksista ja paikallisista kustannusmalleista</footer>
 </div></body></html>`;
 }
@@ -516,6 +552,14 @@ export function renderListingPage(p: PublishedPayload, origin: string): string {
     ? `<p class="cashnote">Käteiskauppa — ei asuntolainaa, ei velkaa, ei pankkia. Ei toistuvia maksuja: ei vastiketta, ei tonttivuokraa.</p>`
     : "";
 
+  const tierBanner =
+    p.tier === "gate"
+      ? ""
+      : `<div class="tierbanner ${p.tier === "pin" ? "pin" : "near"}">
+          <span class="tbt">${p.tier === "pin" ? "★ Suosikki — melkein läpäisi" : "Melkein läpäisi seulan"}</span>
+          <span class="tbd">Täyttää kaikki pakolliset kriteerit ja kunto on vahvistettu hyväksi — vain mallinnettu ostajan riski <b>${p.risk.score}/100</b> ylittää seulan tiukan ≤25 rajan. Ei siis "validoitu", mutta varteenotettava.</span>
+        </div>`;
+
   return `<!doctype html>
 <html lang="fi"><head>
 <meta charset="utf-8">
@@ -551,6 +595,11 @@ a{color:var(--green)}
 .head h1{margin:.15rem 0;font-size:1.75rem;line-height:1.18;letter-spacing:-.01em}
 .price{font-size:2.1rem;font-weight:800;color:var(--cream);margin:.55rem 0 .2rem;letter-spacing:-.02em}
 .cashnote{color:var(--green);font-weight:600;font-size:.95rem;margin:.3rem 0 0}
+.tierbanner{margin:.9rem 1.5rem 0;padding:.85rem 1.05rem;border-radius:12px;background:var(--soft);border-left:3px solid var(--amber)}
+.tierbanner.pin{border-left-color:var(--green)}
+.tbt{display:block;font-weight:800;font-size:.92rem;color:var(--amber);margin-bottom:.2rem}
+.tierbanner.pin .tbt{color:var(--green)}
+.tbd{color:var(--ink2);font-size:.87rem;line-height:1.5}
 section{margin:1.1rem 1.5rem 0}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:1.25rem 1.4rem}
 h2{display:flex;justify-content:space-between;align-items:baseline;gap:.6rem;font-size:.78rem;text-transform:uppercase;letter-spacing:.1em;color:var(--mut);margin:.1rem 0 1rem;font-weight:700}
@@ -646,7 +695,7 @@ ${p.gallery.length > 1 ? `<button class="photocount" id="pcount" type="button">�
   <div class="price">${eur(p.price_eur)}</div>
   ${cashLine}
 </div>
-
+${tierBanner}
 ${costSection}
 ${reasons}
 ${dataSection("Kohteen tiedot", propFacts)}
