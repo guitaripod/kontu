@@ -937,10 +937,13 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     const LIVE_WINDOW_SECS: i64 = 3 * 24 * 3600;
-    let live: Vec<_> = listings
+    let mut live: Vec<_> = listings
         .into_iter()
         .filter(|l| now == 0 || now - l.last_seen <= LIVE_WINDOW_SECS)
         .collect();
+    // Pinned listings must never be dropped by the fetch or the freshness window —
+    // otherwise a pin outside the candidate set would be ranked out AND then pruned.
+    ensure_pinned(client, &spec, &mut live).await;
     let matches: Vec<_> = crate::matching::rank(&spec, live, &defaults)
         .into_iter()
         .filter(|m| m.score >= fit_floor)

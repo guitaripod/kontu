@@ -438,9 +438,14 @@ async function mmlMireFraction(lat: number, lon: number, key: string): Promise<n
   for (const coll of ["suo", "soistuma"]) {
     const url =
       `${MML_BASE}/collections/${coll}/items?bbox=${bbox}` +
-      `&crs=${encodeURIComponent(MML_CRS3067)}&api-key=${key}&f=json&limit=2000`;
+      `&crs=${encodeURIComponent(MML_CRS3067)}&f=json&limit=2000`;
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      // Key via HTTP Basic auth (username = key) so it never sits in a URL that
+      // could leak into an error log.
+      const res = await fetch(url, {
+        headers: { Authorization: `Basic ${btoa(`${key}:`)}` },
+        signal: AbortSignal.timeout(15000),
+      });
       if (!res.ok) continue;
       const body = (await res.json()) as { features?: { geometry?: { type?: string; coordinates?: unknown } }[] };
       reached = true;
