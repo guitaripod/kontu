@@ -48,13 +48,21 @@ app.get("/kontu", async (c) => {
       /* skip a corrupt row */
     }
   }
+  // "Scanned" counts only listings we actually read (detail-enriched). Card-only
+  // listings (Etuovi, whose detail API is gated) have no description and can't be
+  // evaluated, so counting them would overstate the scan.
   const stat = await c.env.DB.prepare(
-    "SELECT COUNT(*) AS scanned, COUNT(DISTINCT municipality) AS municipalities, MAX(last_seen) AS updated FROM listings",
-  ).first<{ scanned: number; municipalities: number; updated: number | null }>();
+    "SELECT " +
+      "SUM(CASE WHEN description IS NOT NULL AND description != '' THEN 1 ELSE 0 END) AS scanned, " +
+      "COUNT(DISTINCT CASE WHEN description IS NOT NULL AND description != '' THEN municipality END) AS municipalities, " +
+      "SUM(CASE WHEN description IS NULL OR description = '' THEN 1 ELSE 0 END) AS unread, " +
+      "MAX(last_seen) AS updated FROM listings",
+  ).first<{ scanned: number; municipalities: number; unread: number; updated: number | null }>();
   const origin = new URL(c.req.url).origin;
   const market = {
     scanned: stat?.scanned ?? items.length,
     municipalities: stat?.municipalities ?? 0,
+    unread: stat?.unread ?? 0,
     updated: stat?.updated ?? null,
   };
   return c.html(renderIndexPage(items, origin, market), 200, {

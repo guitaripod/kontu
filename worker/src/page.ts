@@ -252,7 +252,7 @@ function fact(label: string, value: string, tip?: string): string {
 export function renderIndexPage(
   items: PublishedPayload[],
   origin: string,
-  market?: { scanned: number; municipalities: number; updated: number | null },
+  market?: { scanned: number; municipalities: number; unread?: number; updated: number | null },
 ): string {
   const gate = items.filter((p) => p.tier === "gate").sort((a, b) => (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9));
   const almost = items
@@ -295,6 +295,7 @@ export function renderIndexPage(
   const almostN = almost.length;
   const scanned = market?.scanned ?? n;
   const munis = market?.municipalities ?? 0;
+  const unread = market?.unread ?? 0;
   const updated =
     market?.updated != null
       ? new Intl.DateTimeFormat("fi-FI", { timeZone: "Europe/Helsinki", day: "numeric", month: "numeric", year: "numeric" }).format(
@@ -376,7 +377,7 @@ footer{color:var(--mut);font-size:.85rem;text-align:center;margin-top:2.8rem;pad
   <div class="fstat"><span class="fnum">${munis}</span><span class="flbl">kuntaa eri puolilla Suomea</span></div>
   <div class="fstat hit"><span class="fnum">${n}</span><span class="flbl">läpäisi laatuseulan</span></div>
 </div>
-${updated ? `<p class="upd">Tiedot päivitetty ${updated} · vain laatuseulan läpäisseet näkyvät täällä.</p>` : ""}
+${updated || unread ? `<p class="upd">${updated ? `Tiedot päivitetty ${updated} · ` : ""}vain laatuseulan läpäisseet näkyvät täällä.${unread ? ` (${unread} ilmoitusta vain Etuovessa jäi arvioimatta — tietoja ei voitu lukea.)` : ""}</p>` : ""}
 <section class="about">
 <p>Nämä eivät ole satunnainen lista — kohteet ovat <b>läpäisseet kontun laatuseulan</b>. Algoritmi käy läpi Suomen myynnissä olevat rantakohteet ja päästää listalle vain ne, jotka täyttävät <b>kaikki pakolliset</b> kriteerit. Jokaisesta on lisäksi mallinnettu todelliset asumiskulut ja ostajan riski paikallisilla kustannusmalleilla.</p>
 <div class="critgroup"><span class="crittag req">Pakolliset — kaikkien täytyttävä</span>

@@ -922,7 +922,18 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
     let defaults = client.cost_defaults().await.unwrap_or_default();
     let fit_floor = a.min_fit.unwrap_or(spec.alert_min_fit);
     let listings = fetch_spec_listings(client, &spec, a.scan).await?;
-    let matches: Vec<_> = crate::matching::rank(&spec, listings, &defaults)
+    // Drop listings the nationwide pull hasn't seen for a few days — almost always
+    // sold/delisted (the DB never marks status, so staleness is the only signal).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    const LIVE_WINDOW_SECS: i64 = 3 * 24 * 3600;
+    let live: Vec<_> = listings
+        .into_iter()
+        .filter(|l| now == 0 || now - l.last_seen <= LIVE_WINDOW_SECS)
+        .collect();
+    let matches: Vec<_> = crate::matching::rank(&spec, live, &defaults)
         .into_iter()
         .filter(|m| m.score >= fit_floor)
         .collect();
@@ -964,11 +975,30 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
         }
     }
     watch::save_seen(&seen)?;
+
+    // Prune pages for listings that left the showcase (sold / no longer passing).
+    // Guard on a healthy run with a non-empty result so a bad pull never wipes the site.
+    let mut pruned = 0usize;
+    if failed == 0 && !matches.is_empty() {
+        let live_ids: std::collections::HashSet<i64> = matches.iter().map(|m| m.id).collect();
+        match client.published_ids().await {
+            Ok(existing) => {
+                for id in existing.into_iter().filter(|id| !live_ids.contains(id)) {
+                    match client.delete_published(id).await {
+                        Ok(()) => pruned += 1,
+                        Err(e) => eprintln!("kontu: prune delete failed for {id}: {e}"),
+                    }
+                }
+            }
+            Err(e) => eprintln!("kontu: prune skipped (published_ids failed): {e}"),
+        }
+    }
+
     if json {
-        emit(&json!({ "checked": matches.len(), "published": published, "alerted": alerted, "failed": failed }))
+        emit(&json!({ "checked": matches.len(), "published": published, "alerted": alerted, "pruned": pruned, "failed": failed }))
     } else {
         println!(
-            "checked {} matches · {published} published · {alerted} alerted{}",
+            "checked {} matches · {published} published · {alerted} alerted · {pruned} pruned{}",
             matches.len(),
             if failed > 0 { format!(" · {failed} failed") } else { String::new() }
         );

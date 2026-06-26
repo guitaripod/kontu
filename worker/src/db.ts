@@ -421,6 +421,13 @@ export async function listPublishedPages(db: D1Database): Promise<string[]> {
   return results.map((r) => r.payload_json);
 }
 
+export async function listPublishedIds(db: D1Database): Promise<{ listing_id: number; tier: string | null }[]> {
+  const { results } = await db
+    .prepare("SELECT listing_id, tier FROM published_pages")
+    .all<{ listing_id: number; tier: string | null }>();
+  return results;
+}
+
 const LISTING_COLUMNS = [
   "property_id",
   "portal",

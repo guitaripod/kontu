@@ -36,6 +36,7 @@ import {
   upsertPublishedPage,
   deletePublishedPage,
   getPublishedPage,
+  listPublishedIds,
   type ListingsFilter,
 } from "../db";
 import { bugPressure } from "../geo";
@@ -138,6 +139,13 @@ api.post("/publish/:id/reenrich", async (c) => {
   const enriched = await withBugPressure(payload, true);
   await upsertPublishedPage(c.env.DB, id, "gate", JSON.stringify(enriched));
   return c.json({ ok: true, id, bug_pressure: (enriched as Record<string, unknown>).bug_pressure });
+});
+
+/// List the listing ids currently on the public site (so the CLI can prune pages
+/// for listings that sold / left the showcase). Token-guarded like /publish.
+api.get("/published-ids", async (c) => {
+  const ids = await listPublishedIds(c.env.DB);
+  return c.json({ ids });
 });
 
 api.delete("/publish/:id", async (c) => {

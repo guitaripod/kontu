@@ -220,6 +220,30 @@ impl KontuClient {
         let _: serde_json::Value = Self::parse(resp, "publish_page").await?;
         Ok(())
     }
+
+    /// Listing ids currently on the public site (to prune sold/gone listings).
+    pub async fn published_ids(&self) -> Result<Vec<i64>> {
+        #[derive(serde::Deserialize)]
+        struct Row {
+            listing_id: i64,
+        }
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            ids: Vec<Row>,
+        }
+        let resp: Resp = self.get_json("/api/published-ids", &[]).await?;
+        Ok(resp.ids.into_iter().map(|r| r.listing_id).collect())
+    }
+
+    /// Remove a listing's public page (sold / no longer in the showcase).
+    pub async fn delete_published(&self, id: i64) -> Result<()> {
+        let resp = Self::send_retrying(|| {
+            self.http.delete(self.url(&format!("/api/publish/{id}"))).bearer_auth(&self.token)
+        })
+        .await?;
+        let _: serde_json::Value = Self::parse(resp, "delete_published").await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
