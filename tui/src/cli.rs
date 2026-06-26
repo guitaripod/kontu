@@ -921,7 +921,15 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
     }
     let defaults = client.cost_defaults().await.unwrap_or_default();
     let fit_floor = a.min_fit.unwrap_or(spec.alert_min_fit);
-    let listings = fetch_spec_listings(client, &spec, a.scan).await?;
+    // A transient backend blip (e.g. Cloudflare 503) must not fail the whole cycle
+    // and spam systemd — skip quietly and let the next scheduled run recover.
+    let listings = match fetch_spec_listings(client, &spec, a.scan).await {
+        Ok(l) => l,
+        Err(e) => {
+            ok(json, format!("skipped this cycle — backend unavailable (transient): {e}"));
+            return Ok(());
+        }
+    };
     // Drop listings the nationwide pull hasn't seen for a few days — almost always
     // sold/delisted (the DB never marks status, so staleness is the only signal).
     let now = std::time::SystemTime::now()

@@ -56,17 +56,17 @@ impl KontuClient {
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
-        let mut delay_ms = 350u64;
+        let mut delay_ms = 500u64;
         let mut attempt = 0u32;
         loop {
             attempt += 1;
-            let last = attempt >= 3;
+            let last = attempt >= 6;
             match make().send().await {
                 Ok(resp) => {
                     let s = resp.status();
                     if !last && (s.is_server_error() || s.as_u16() == 429) {
                         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        delay_ms *= 3;
+                        delay_ms = (delay_ms * 5 / 2).min(8000);
                         continue;
                     }
                     return Ok(resp);
@@ -74,7 +74,7 @@ impl KontuClient {
                 Err(e) => {
                     if !last && (e.is_timeout() || e.is_connect() || e.is_request()) {
                         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        delay_ms *= 3;
+                        delay_ms = (delay_ms * 5 / 2).min(8000);
                         continue;
                     }
                     return Err(e).context("sending request");
