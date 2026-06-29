@@ -58,7 +58,3 @@ pub fn ppm2_opt(v: Option<f64>) -> String {
         None => "—".to_string(),
     }
 }
-
-pub fn pct(v: f64) -> String {
-    format!("{:.2}%", v * 100.0)
-}

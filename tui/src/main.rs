@@ -1,27 +1,20 @@
-mod action;
 mod api;
-mod app;
 mod card;
 mod cli;
 mod config;
 mod cost;
+mod country;
 mod format;
 mod ingest;
-mod logging;
 mod matching;
 mod models;
-#[cfg(test)]
-mod render_smoke;
 mod risk;
 mod spec;
 mod telegram;
-mod theme;
-mod tui;
-mod ui;
 mod watch;
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -38,23 +31,10 @@ async fn main() -> Result<()> {
 
     match args.command {
         Some(command) => cli::run(command, &client, args.json).await,
-        None => run_tui(client, &config).await,
+        None => {
+            cli::Cli::command().print_help()?;
+            println!();
+            Ok(())
+        }
     }
-}
-
-async fn run_tui(client: api::KontuClient, config: &config::Config) -> Result<()> {
-    let _log_guard = logging::init()?;
-    tracing::info!(server = %config.server_url, "kontu starting");
-    let picker = ratatui_image::picker::Picker::from_query_stdio().ok();
-    let mut app = app::App::new(client, config, picker);
-
-    let mut tui = tui::Tui::new()?;
-    let result = app.run(&mut tui).await;
-    drop(tui);
-
-    if let Err(err) = &result {
-        tracing::error!(error = %err, "kontu exited with error");
-        eprintln!("kontu: {err}");
-    }
-    result
 }
