@@ -22,6 +22,13 @@ python3 scripts/nordic/booli.py 2>&1 | tail -3 || log "SE ingest had errors (con
 log "ingesting Norway (Finn) ..."
 python3 scripts/nordic/finn.py 2>&1 | tail -3 || log "NO ingest had errors (continuing)"
 
+# Geometric shore detection from THIS residential IP. The Worker also runs it on its
+# cron, but the public Overpass API rate-limits Cloudflare's egress under load; the
+# residential IP is served freely, so this is the reliable place to classify fresh
+# coordinates into lake/coast shores before the match needs them.
+log "detecting shores (Overpass, residential) ..."
+python3 scripts/nordic/shore.py 2>&1 | tail -3 || log "shore detection had errors (continuing)"
+
 log "match + Telegram alerts + publish (incl. Finland pull) ..."
 kontu watch run
 

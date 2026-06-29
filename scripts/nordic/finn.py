@@ -19,7 +19,7 @@ def tenure(text):
     if "andel" in t or "aksje" in t or "borettslag" in t: return "asunto_osake"
     return None
 def fetch(url):
-    return subprocess.run(["curl","-s","-m","25","--http2","-H",f"User-Agent: {UA}",
+    return subprocess.run(["curl","-sL","-m","25","--http2","-H",f"User-Agent: {UA}",
         "-H","Accept-Language: nb-NO,nb;q=0.9","-H",'sec-ch-ua-platform: "Linux"',url],
         capture_output=True,text=True,timeout=35).stdout
 def parse(html):
@@ -62,6 +62,23 @@ for vert in ("leisuresale","homes"):
         time.sleep(1.5+random.random())
 seen={r["portal_listing_id"]:r for r in cheap}; cheap=list(seen.values())
 print(f"\nNO cheap (<=100k EUR) houses: {len(cheap)}")
+
+# FINN search cards carry no coordinates; the per-ad detail page embeds them in the
+# static-map URL (lat=..&lon=..). Pull them so the Worker's geometric shore detection
+# (OSM Overpass on lat/lon) can find Norway's lake/fjord shores — without coords a NO
+# listing can never surface as a waterfront candidate. Best-effort + paced to stay
+# human; a miss leaves coords null and the COALESCE upsert keeps any prior value.
+def detail_coords(url):
+    h=fetch(url).replace('\\u0026','&')
+    m=re.search(r'lat=(-?\d+\.\d+)&lon=(-?\d+\.\d+)&zoom=', h)
+    return (float(m.group(1)), float(m.group(2))) if m else (None, None)
+got=0
+for r in cheap:
+    lat,lon=detail_coords(r["url"])
+    if lat is not None:
+        r["lat"],r["lon"]=lat,lon; got+=1
+    time.sleep(1.0+random.random())
+print(f"  geocoded {got}/{len(cheap)} from detail pages")
 def post(ls):
     json.dump({"listings":ls},open("/tmp/finn_post.json","w"))
     return subprocess.run(["curl","-s","-m","60","-X","POST","-H",f"Authorization: Bearer {TOKEN}",

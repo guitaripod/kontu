@@ -143,12 +143,14 @@ export async function enrichShoreBatch(db: D1Database, limit: number): Promise<n
       .bind(limit)
       .all<{ id: number; lat: number; lon: number }>();
     for (const r of results) {
-      const wb = await shoreFromOsm(r.lat, r.lon);
+      const probe = await shoreFromOsm(r.lat, r.lon);
+      if (!probe.ok) continue; // query failed — leave shore NULL so it's retried, not poisoned
       await db
         .prepare("UPDATE listings SET shore = ?, water_body = ? WHERE id = ?")
-        .bind(wb == null ? "ei_rantaa" : "oma_ranta", wb, r.id)
+        .bind(probe.water == null ? "ei_rantaa" : "oma_ranta", probe.water, r.id)
         .run();
       done++;
+      await new Promise((res) => setTimeout(res, 1100)); // be gentle on the public Overpass API
     }
   } catch (err) {
     console.warn("shore enrichment failed", String(err));
@@ -156,8 +158,14 @@ export async function enrichShoreBatch(db: D1Database, limit: number): Promise<n
   return done;
 }
 
-/** Lake within ~150 m → 'jarvi'; coastline within ~400 m → 'meri'; else null. */
-async function shoreFromOsm(lat: number, lon: number): Promise<string | null> {
+/** Result of a geometric shore probe. `ok: false` means the Overpass query FAILED
+ *  (HTTP error / rate-limit / timeout) — distinct from a successful query that found
+ *  no water (`ok: true, water: null`). The caller must NOT mark a failed probe as
+ *  "no shore", or a transient Overpass blip permanently poisons the listing. */
+type ShoreProbe = { ok: false } | { ok: true; water: "jarvi" | "meri" | null };
+
+/** Lake within ~150 m → 'jarvi'; coastline within ~400 m → 'meri'; else no water. */
+async function shoreFromOsm(lat: number, lon: number): Promise<ShoreProbe> {
   try {
     const q =
       `[out:json][timeout:20];(` +
@@ -169,18 +177,18 @@ async function shoreFromOsm(lat: number, lon: number): Promise<string | null> {
       headers: { "Content-Type": "text/plain", Accept: "application/json" },
       body: q,
     });
-    if (!res.ok) return null;
+    if (!res.ok) return { ok: false };
     const body = (await res.json()) as { elements?: Array<{ tags?: Record<string, string> }> };
     const els = body.elements ?? [];
     const coast = els.some((e) => e.tags?.natural === "coastline");
     const firstWater = els.find((e) => e.tags?.natural === "water");
     if (firstWater) {
       const t = firstWater.tags ?? {};
-      return t.water === "bay" || t.water === "lagoon" || coast ? "meri" : "jarvi";
+      return { ok: true, water: t.water === "bay" || t.water === "lagoon" || coast ? "meri" : "jarvi" };
     }
-    return coast ? "meri" : null;
+    return { ok: true, water: coast ? "meri" : null };
   } catch {
-    return null;
+    return { ok: false };
   }
 }
 

@@ -41,7 +41,7 @@ import {
 } from "../db";
 import { bugPressure } from "../geo";
 import { crawlTick } from "../crawl";
-import { enrichBatch } from "../geo";
+import { enrichBatch, enrichShoreBatch } from "../geo";
 import {
   normalizeOikotieCard,
   normalizeEtuoviAnnouncement,
@@ -141,6 +141,38 @@ api.post("/publish/:id/reenrich", async (c) => {
   const enriched = await withBugPressure(payload, true, null, c.env.MML_API_KEY);
   await upsertPublishedPage(c.env.DB, id, "gate", JSON.stringify(enriched));
   return c.json({ ok: true, id, bug_pressure: (enriched as Record<string, unknown>).bug_pressure });
+});
+
+/// Run geometric (OSM) shore detection on demand for listings that have coordinates
+/// but no shore yet — the same pass the cron runs, exposed so a fresh cross-Nordic
+/// ingest can be enriched immediately instead of waiting a day. Token-guarded.
+api.post("/enrich-shores", async (c) => {
+  // Bounded per call (each probe is a paced Overpass request — keep within the Worker
+  // request budget). Most recent listings first, so a fresh cross-Nordic ingest is
+  // classified before the long tail; call repeatedly / let the daily cron finish.
+  const limit = Math.min(40, Math.max(1, Number(c.req.query("limit") ?? 40)));
+  const enriched = await enrichShoreBatch(c.env.DB, limit);
+  return c.json({ ok: true, enriched });
+});
+
+/// Write coordinate-derived shores computed off-box. The Worker's egress IP is rate
+/// -limited by the public Overpass API under load, so the residential radar (whose IP
+/// Overpass serves freely) can run the same geometric detection and post results here.
+/// Only touches shore/water_body — never the source fields. Token-guarded.
+api.post("/set-shore", async (c) => {
+  const body = await c.req
+    .json<{ updates?: Array<{ id?: number; shore?: string; water_body?: string | null }> }>()
+    .catch(() => null);
+  const updates = body?.updates ?? [];
+  let updated = 0;
+  for (const u of updates) {
+    if (!Number.isInteger(u.id) || typeof u.shore !== "string") continue;
+    await c.env.DB.prepare("UPDATE listings SET shore = ?, water_body = ? WHERE id = ?")
+      .bind(u.shore, u.water_body ?? null, u.id)
+      .run();
+    updated++;
+  }
+  return c.json({ ok: true, updated });
 });
 
 /// List the listing ids currently on the public site (so the CLI can prune pages
