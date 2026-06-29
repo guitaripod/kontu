@@ -1,20 +1,35 @@
 //! Agent-native command line. Every subcommand supports `--json` for structured
 //! output, and `--help` documents the surface so an LLM can discover and drive
-//! it. With no subcommand the binary launches the interactive TUI instead.
+//! it. With no subcommand the binary prints help.
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use serde_json::json;
 
 use crate::api::KontuClient;
-use crate::app::CostState;
 use crate::config::Config;
-use crate::cost::{HeatingType, Projection, RepaymentType};
+use crate::cost::{CostDefaults, CostState, HeatingType, Projection, RepaymentType};
 use crate::format::{area_opt, int_opt, money, money_opt, num_opt, ppm2_opt, str_opt};
 use crate::models::{FilterState, Listing, ListingDetail, ListingsPage, SortColumn};
 use crate::risk::{self, RiskAssessment};
 use crate::spec::{Pref, Spec};
 use crate::{telegram, watch};
+
+/// Resolve cost-model defaults for a listing by its country. Finland keeps the
+/// Worker-provided (overridable) defaults; the other Nordic markets use their
+/// built-in calibrated seeds. Refuses a country whose model isn't calibrated yet
+/// rather than silently costing it with Finnish numbers.
+fn defaults_for_listing(worker_fi: &CostDefaults, listing: &Listing) -> Result<CostDefaults> {
+    let country = listing.country_enum();
+    if !country.cost_calibrated() {
+        anyhow::bail!(
+            "the cost & risk model for {} ({}) is not calibrated yet",
+            country.name(),
+            country.code()
+        );
+    }
+    Ok(CostDefaults::resolve(worker_fi, country))
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -205,10 +220,16 @@ pub struct SpecSetArgs {
     price_max: Option<i64>,
     #[arg(long)]
     price_min: Option<i64>,
-    /// Municipality to search (repeatable); none = anywhere in Finland
+    /// Country to search: FI|SE|NO|DK|IS (repeatable); none = all Nordic
+    #[arg(long = "country")]
+    country: Vec<String>,
+    /// Search all Nordic countries (clears the saved country filter)
+    #[arg(long = "all-countries")]
+    all_countries: bool,
+    /// Municipality to search (repeatable); none = anywhere in the chosen countries
     #[arg(long = "area")]
     area: Vec<String>,
-    /// Search anywhere in Finland (clears saved areas)
+    /// Search anywhere (clears saved areas)
     #[arg(long)]
     anywhere: bool,
     /// Property type (repeatable), e.g. omakotitalo, mökki
@@ -306,6 +327,11 @@ impl SpecSetArgs {
         }
         if let Some(v) = self.price_min {
             s.price_min = Some(v);
+        }
+        if self.all_countries {
+            s.countries.clear();
+        } else if !self.country.is_empty() {
+            s.countries = self.country.iter().map(|c| c.to_uppercase()).collect();
         }
         if self.anywhere {
             s.municipalities.clear();
@@ -429,6 +455,9 @@ pub struct PullArgs {
 
 #[derive(Args, Debug)]
 pub struct ListArgs {
+    /// Country: FI | SE | NO | DK | IS (default: all supported)
+    #[arg(long)]
+    country: Option<String>,
     #[arg(long)]
     municipality: Option<String>,
     /// Property type: omakotitalo | paritalo | rivitalo | kerrostalo | mökki
@@ -484,6 +513,7 @@ pub struct ListArgs {
 impl ListArgs {
     fn into_query(self) -> (FilterState, SortColumn, bool, u32) {
         let filter = FilterState {
+            country: self.country.map(|c| c.to_uppercase()),
             municipality: self.municipality,
             property_type: self.property_type,
             holding_form: self.holding,
@@ -598,7 +628,8 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
         }
         Command::Show { id } => {
             let detail = client.get_listing(id).await?;
-            let defaults = client.cost_defaults().await.unwrap_or_default();
+            let worker_defaults = client.cost_defaults().await.unwrap_or_default();
+            let defaults = defaults_for_listing(&worker_defaults, &detail.listing)?;
             let assessment = assess(&detail);
             let mut cs = CostState::from_defaults(&defaults);
             cs.apply_listing(&detail.listing, &assessment, &defaults);
@@ -622,7 +653,8 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
         }
         Command::Cost(a) => {
             let detail = client.get_listing(a.id).await?;
-            let defaults = client.cost_defaults().await.unwrap_or_default();
+            let worker_defaults = client.cost_defaults().await.unwrap_or_default();
+            let defaults = defaults_for_listing(&worker_defaults, &detail.listing)?;
             let assessment = assess(&detail);
             let mut cs = CostState::from_defaults(&defaults);
             cs.apply_listing(&detail.listing, &assessment, &defaults);
@@ -649,10 +681,11 @@ pub async fn run(command: Command, client: &KontuClient, json: bool) -> Result<(
             }
         }
         Command::Compare { ids } => {
-            let defaults = client.cost_defaults().await.unwrap_or_default();
+            let worker_defaults = client.cost_defaults().await.unwrap_or_default();
             let mut rows = Vec::new();
             for id in ids {
                 let detail = client.get_listing(id).await?;
+                let defaults = defaults_for_listing(&worker_defaults, &detail.listing)?;
                 let assessment = assess(&detail);
                 let mut cs = CostState::from_defaults(&defaults);
                 cs.apply_listing(&detail.listing, &assessment, &defaults);

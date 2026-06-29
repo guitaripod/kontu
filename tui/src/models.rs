@@ -3,6 +3,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::cost::HeatingType;
+use crate::country::Country;
 use crate::risk::RiskInput;
 
 /// Accept a SQLite-style boolean: JSON `true/false`, integer `0/1`, or null.
@@ -28,6 +29,10 @@ pub struct Listing {
     pub portal: String,
     pub portal_listing_id: String,
     pub url: String,
+    /// ISO country code of the market this listing belongs to (FI/SE/NO/DK/IS).
+    /// Absent on legacy payloads → treated as Finland.
+    #[serde(default)]
+    pub country: Option<String>,
 
     #[serde(default)]
     pub property_type: Option<String>,
@@ -211,8 +216,14 @@ impl Listing {
 
     /// Build a [`RiskInput`] from this listing. `near_water` comes from the
     /// location dossier (or the shore field as a fallback).
+    /// The market this listing belongs to (defaults to Finland on legacy data).
+    pub fn country_enum(&self) -> Country {
+        self.country.as_deref().and_then(Country::parse).unwrap_or_default()
+    }
+
     pub fn to_risk_input(&self, near_water: bool) -> RiskInput {
         RiskInput {
+            country: self.country_enum(),
             build_year: self.year_built,
             risk_structures: self.risk_structures.clone(),
             heating: self.heating_type.clone(),
@@ -290,6 +301,8 @@ impl SortColumn {
 /// Exact-parameter filter (the core feature). Serialized to query params for the API.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FilterState {
+    /// ISO country code(s) to search; empty = every supported Nordic market.
+    pub country: Option<String>,
     pub municipality: Option<String>,
     pub property_type: Option<String>,
     pub holding_form: Option<String>,
@@ -320,6 +333,7 @@ impl FilterState {
                     q.push((k.to_string(), v.clone()));
                 }
         };
+        s("country", &self.country);
         s("municipality", &self.municipality);
         s("property_type", &self.property_type);
         s("holding_form", &self.holding_form);

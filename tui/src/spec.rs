@@ -69,7 +69,9 @@ impl Default for Weights {
 pub struct Spec {
     pub price_max: Option<i64>,
     pub price_min: Option<i64>,
-    /// Municipalities to search; empty = anywhere in Finland.
+    /// Nordic countries to search (ISO codes FI/SE/NO/DK/IS); empty = all supported.
+    pub countries: Vec<String>,
+    /// Municipalities to search; empty = anywhere in the selected countries.
     pub municipalities: Vec<String>,
     /// Property types of interest, e.g. omakotitalo, mökki.
     pub property_types: Vec<String>,
@@ -139,6 +141,7 @@ impl Default for Spec {
         Self {
             price_max: None,
             price_min: None,
+            countries: Vec::new(),
             municipalities: Vec::new(),
             property_types: Vec::new(),
             shore: Pref::Any,

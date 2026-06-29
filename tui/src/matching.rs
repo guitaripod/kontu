@@ -6,7 +6,7 @@
 
 use serde::Serialize;
 
-use crate::app::CostState;
+use crate::cost::CostState;
 use crate::cost::CostDefaults;
 use crate::models::Listing;
 use crate::risk;
@@ -64,18 +64,58 @@ fn has(text: &str, needles: &[&str]) -> bool {
 fn fold_ascii(s: &str) -> String {
     s.chars()
         .map(|c| match c {
-            'ä' | 'å' | 'Ä' | 'Å' => 'a',
-            'ö' | 'Ö' => 'o',
+            'ä' | 'å' | 'Ä' | 'Å' | 'á' | 'à' | 'Á' => 'a',
+            'ö' | 'Ö' | 'ó' | 'ø' | 'Ø' | 'Ó' | 'ò' => 'o',
+            'í' | 'ì' | 'Í' => 'i',
+            'ý' | 'Ý' => 'y',
+            'ú' | 'ü' | 'Ú' | 'ù' => 'u',
+            'é' | 'è' | 'É' => 'e',
+            'ð' | 'Ð' => 'd',
             other => other.to_ascii_lowercase(),
         })
         .collect()
 }
 
+/// Canonical cross-Nordic property family, so a Finnish `omakotitalo`, Swedish
+/// `villa`, Norwegian `enebolig`, Danish `detached` and Icelandic `einbýlishús`
+/// all classify the same. Lets a spec written in Finnish tokens match listings
+/// normalized to any country's vocabulary.
+fn property_family(token: &str) -> &'static str {
+    let t = fold_ascii(token);
+    // Leisure is checked first: "holiday house" / "fritidshus" must not be caught
+    // by the "house" branch.
+    if has(&t, &["mokki", "loma", "vapaa-ajan", "fritid", "leisure", "holiday", "hytte", "sumarhus", "sumarbustad", "cottage"]) {
+        "leisure"
+    } else if has(&t, &["omakoti", "erillis", "detached", "einbyli", "enebolig", "villa", "parcelhus", "fritliggende", "house"]) {
+        "house"
+    } else if has(&t, &["pari", "tomanns", "parhus", "kedjehus", "dobbelthus", "semi"]) {
+        "semi"
+    } else if has(&t, &["rivi", "terraced", "radhus", "raekkehus", "rekkehus", "kaede"]) {
+        "terraced"
+    } else if has(&t, &["kerrostal", "apartment", "lagenhet", "leilighet", "haed", "condo", "ibud", "ejerlejlighed", "fjolbyli"]) {
+        "apartment"
+    } else if has(&t, &["maatila", "farm", "gard", "smabruk", "jord", "landejendom"]) {
+        "farm"
+    } else if has(&t, &["plot", "tomt", "land", "mark", "tontti", "maaraala", "lod"]) {
+        "plot"
+    } else {
+        "other"
+    }
+}
+
+/// True when the listing's shore field (in any country's normalized vocabulary)
+/// denotes OWNING the waterfront.
+fn shore_is_own(shore: &str) -> bool {
+    let s = shore.to_lowercase();
+    has(&s, &["oma_ranta", "own_shore", "egen strand", "sjotomt", "strandtomt", "sjavarlod", "sjotomt"])
+}
+
 fn shore_signal(l: &Listing, desc: &str) -> f64 {
-    let structured: f64 = match l.shore.as_deref() {
-        Some(s) if s.contains("oma_ranta") => 1.0,
-        Some(s) if s.contains("rantaoik") => 0.7,
-        Some(s) if s.contains("ei_ranta") => 0.0,
+    let structured: f64 = match l.shore.as_deref().map(|s| s.to_lowercase()) {
+        Some(ref s) if shore_is_own(s) => 1.0,
+        Some(ref s) if has(s, &["rantaoik", "shore_right", "strandratt", "strandrett"]) => 0.7,
+        Some(ref s) if has(s, &["water_view", "sea_view", "sjoutsikt", "havudsigt", "soeudsigt"]) => 0.3,
+        Some(ref s) if has(s, &["ei_ranta", "no_shore"]) => 0.0,
         _ => -1.0,
     };
     let textual = if has(desc, &["rantasauna", "oma ranta", "omarant"]) {
@@ -348,7 +388,7 @@ fn pref_signal(pref: Pref, signal: f64) -> f64 {
 /// water body counts (rural lake listings name the lake only in free text), but
 /// river / pond / sea / no-shore do not.
 fn own_lake_shore(l: &Listing) -> bool {
-    l.shore.as_deref().map(|s| s.contains("oma_ranta")).unwrap_or(false)
+    l.shore.as_deref().map(shore_is_own).unwrap_or(false)
         && l
             .water_body
             .as_deref()
@@ -372,8 +412,13 @@ fn passes_structural(spec: &Spec, l: &Listing) -> bool {
             return false;
         }
     if !spec.property_types.is_empty() {
+        // Match on the canonical family (so a Finnish-token spec matches Swedish /
+        // Danish / Icelandic listings), keeping a substring check as a fallback.
         let t = fold_ascii(l.property_type.as_deref().unwrap_or(""));
-        if !spec.property_types.iter().any(|want| t.contains(&fold_ascii(want))) {
+        let got = property_family(&t);
+        let family_match = spec.property_types.iter().any(|w| property_family(w) == got);
+        let substring_match = spec.property_types.iter().any(|w| t.contains(&fold_ascii(w)));
+        if got == "other" || (!family_match && !substring_match) {
             return false;
         }
     }
@@ -436,7 +481,10 @@ fn passes_structural(spec: &Spec, l: &Listing) -> bool {
 /// is allowed to miss: shore, winter-readiness, condition, basic infra, and any
 /// explicitly avoided trait that is clearly present.
 fn passes_preferences(spec: &Spec, l: &Listing, s: &Signals) -> bool {
-    if pref_excludes(spec.shore, s.shore)
+    // Iceland has essentially no lakes, so a lake shore is not required there — a
+    // good house anywhere in Iceland qualifies on the shore dimension.
+    let shore_applies = lake_country(l);
+    if (shore_applies && pref_excludes(spec.shore, s.shore))
         || pref_excludes(spec.ev_charging, s.ev)
         || pref_excludes(spec.fiber, s.fiber)
         || pref_excludes(spec.privacy, s.privacy)
@@ -454,7 +502,7 @@ fn passes_preferences(spec: &Spec, l: &Listing, s: &Signals) -> bool {
     if matches!(spec.condition, Pref::Required) && s.condition < 0.5 {
         return false;
     }
-    if matches!(spec.shore, Pref::Required) && !own_lake_shore(l) {
+    if shore_applies && matches!(spec.shore, Pref::Required) && !own_lake_shore(l) {
         return false;
     }
     if spec.require_infra && s.infra < 0.25 {
@@ -463,11 +511,17 @@ fn passes_preferences(spec: &Spec, l: &Listing, s: &Signals) -> bool {
     true
 }
 
+/// Whether a lake shore is a meaningful requirement in this listing's country.
+/// Iceland (volcanic, near-lakeless) is exempt so its houses aren't all dropped.
+fn lake_country(l: &Listing) -> bool {
+    l.country_enum() != crate::country::Country::Is
+}
+
 /// The required preferences a listing fails, as short Finnish labels for the website.
 /// Empty for a clean gate-passer; non-empty is exactly why a value outlier is off-spec.
 fn off_spec_reasons(spec: &Spec, l: &Listing, s: &Signals) -> Vec<String> {
     let mut v = Vec::new();
-    if matches!(spec.shore, Pref::Required) && !own_lake_shore(l) {
+    if lake_country(l) && matches!(spec.shore, Pref::Required) && !own_lake_shore(l) {
         v.push("Ei omaa järvenrantaa".to_string());
     }
     // A detached house on its own plot (ev ≥ 0.4) can always add a charger, so only
@@ -557,6 +611,14 @@ struct Candidate {
 pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec<Scored> {
     let mut candidates: Vec<Candidate> = Vec::new();
     for l in listings {
+        // Country scope: when the spec names countries, only those are in play
+        // (pins still ride along, like the gate).
+        if !spec.countries.is_empty()
+            && !spec.pinned.contains(&l.id)
+            && !spec.countries.iter().any(|c| c.eq_ignore_ascii_case(l.country_enum().code()))
+        {
+            continue;
+        }
         let s = signals(&l);
         let pinned = spec.pinned.contains(&l.id);
         let passes_struct = passes_structural(spec, &l);
@@ -595,13 +657,14 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
         if !pinned && !within_gate && !within_near && !value_outlier {
             continue;
         }
-        let mut cs = CostState::from_defaults(defaults);
-        cs.apply_listing(&l, &assessment, defaults);
+        let cd = CostDefaults::resolve(defaults, l.country_enum());
+        let mut cs = CostState::from_defaults(&cd);
+        cs.apply_listing(&l, &assessment, &cd);
         cs.horizon = spec.horizon_years;
         if spec.cash {
             cs.ltv = 0.0;
         }
-        let proj = cs.project(defaults);
+        let proj = cs.project(&cd);
         candidates.push(Candidate {
             listing: l,
             signals: s,
@@ -995,5 +1058,39 @@ mod tests {
         assert!(cs(&fixer) <= 0.3, "remontin tarpeessa reads needs-work");
         assert!(cs(&move_in) >= 0.9, "muuttovalmis/remontoitu reads good condition");
         assert!(cs(&valesokkeli_era) < cs(&modern), "1975 era is riskier than 2015");
+    }
+
+    #[test]
+    fn property_family_classifies_across_the_nordics() {
+        for t in ["omakotitalo", "detached", "Villa", "enebolig", "einbýlishús"] {
+            assert_eq!(property_family(t), "house", "{t}");
+        }
+        for t in ["mökki", "fritidshus", "Hytte", "sumarhús", "holiday house"] {
+            assert_eq!(property_family(t), "leisure", "{t}");
+        }
+        assert_eq!(property_family("farm"), "farm");
+        assert_eq!(property_family("garage"), "other");
+    }
+
+    #[test]
+    fn finnish_token_spec_matches_other_countries_structurally() {
+        let spec = Spec {
+            property_types: vec!["omakotitalo".into(), "mökki".into()],
+            ..Default::default()
+        };
+        let dk_house = Listing { property_type: Some("detached".into()), price_eur: Some(90_000), ..Default::default() };
+        let se_cabin = Listing { property_type: Some("fritidshus".into()), price_eur: Some(90_000), ..Default::default() };
+        let is_farm = Listing { property_type: Some("farm".into()), price_eur: Some(90_000), ..Default::default() };
+        assert!(passes_structural(&spec, &dk_house), "DK detached should match an omakotitalo/mökki spec");
+        assert!(passes_structural(&spec, &se_cabin), "SE fritidshus should match mökki");
+        assert!(!passes_structural(&spec, &is_farm), "a farm is neither omakotitalo nor mökki");
+    }
+
+    #[test]
+    fn own_shore_recognized_across_countries() {
+        assert!(own_lake_shore(&Listing { shore: Some("own_shore".into()), ..Default::default() }));
+        assert!(own_lake_shore(&Listing { shore: Some("oma_ranta".into()), ..Default::default() }));
+        assert!(!own_lake_shore(&Listing { shore: Some("no_shore".into()), ..Default::default() }));
+        assert!(!own_lake_shore(&Listing { shore: None, ..Default::default() }));
     }
 }

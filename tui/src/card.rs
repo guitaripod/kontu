@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::api::KontuClient;
-use crate::app::CostState;
+use crate::cost::CostState;
 use crate::models::{Listing, ListingDetail};
 use crate::risk::{self, RiskAssessment};
 
@@ -83,6 +83,7 @@ pub async fn render_card(
         .map(|s| s.contains("oma_ranta") || s.contains("rantaoik"))
         .unwrap_or(false);
     let assessment = risk::assess(&l.to_risk_input(near_water), 2026);
+    let defaults = crate::cost::CostDefaults::resolve(&defaults, l.country_enum());
     let mut cs = CostState::from_defaults(&defaults);
     cs.apply_listing(l, &assessment, &defaults);
     cs.ltv = 0.0;
@@ -194,8 +195,7 @@ fn build_svg(
     let monthly = (proj.years.first().map(|y| y.recurring).unwrap_or(0.0) / 12.0).round() as i64;
     let acq = (l.price_eur.unwrap_or(0) as f64
         + proj.one_time.transfer_tax
-        + proj.one_time.lainhuuto
-        + proj.one_time.kaupanvahvistus
+        + proj.one_time.registration_total()
         + proj.one_time.inspection)
         .round() as i64;
     let kvero = l.kiinteistovero_eur_yr;
