@@ -17,6 +17,9 @@ pub struct Scored {
     pub id: i64,
     pub title: String,
     pub municipality: Option<String>,
+    /// ISO country code (FI/SE/NO/DK/IS) — drives the cross-Nordic, country-balanced
+    /// selection of the candidate lane so the showcase isn't dominated by one market.
+    pub country: String,
     pub price_eur: Option<i64>,
     pub property_type: Option<String>,
     pub url: String,
@@ -118,9 +121,19 @@ fn shore_signal(l: &Listing, desc: &str) -> f64 {
         Some(ref s) if has(s, &["ei_ranta", "no_shore"]) => 0.0,
         _ => -1.0,
     };
-    let textual = if has(desc, &["rantasauna", "oma ranta", "omarant"]) {
+    let textual = if has(desc, &[
+        "rantasauna", "oma ranta", "omarant",
+        // SE / NO own-shore
+        "egen strand", "egen strandlinje", "sjötomt", "sjotomt", "strandtomt", "egen brygga",
+        "sjøtomt", "egen strandlinje ved",
+    ]) {
         0.95
-    } else if has(desc, &["ranta", "järv", "jarv", "rannal", "vesist", "mökki jär"]) {
+    } else if has(desc, &[
+        "ranta", "järv", "jarv", "rannal", "vesist", "mökki jär",
+        // SE / NO near-water
+        "sjönära", "sjonara", "sjöutsikt", "sjoutsikt", "strandnära", "ved vannet", "innsjø",
+        "vannkant", "strandlinje",
+    ]) {
         0.6
     } else {
         0.0
@@ -228,6 +241,54 @@ fn is_buildable_plot(l: &Listing, desc: &str) -> bool {
     no_dwelling && has(desc, &["mahdollisuus rakentaa", "rakentaa ympärivuoti", "rakennusmahdollisuu"])
 }
 
+/// True when the plot is LEASED, not owned — the cross-Nordic owned-plot
+/// deal-breaker: FI vuokratontti, SE arrende / tomträtt, NO festet tomt /
+/// punktfeste, DK lejet grund, IS leiguló(ð). Reads the structured field and the
+/// prose (the leased status is often only stated in the listing text).
+fn is_leased_plot(l: &Listing, desc: &str) -> bool {
+    let field = l
+        .plot_ownership
+        .as_deref()
+        .map(|o| {
+            let o = o.to_lowercase();
+            o.contains("vuokra")
+                || o.contains("arrende")
+                || o.contains("fest")
+                || o.contains("tomtr")
+                || o.contains("leasehold")
+                || o.contains("leigu")
+        })
+        .unwrap_or(false);
+    field
+        || has(
+            desc,
+            &[
+                "arrendetomt", "är ett arrende", "arrenderad tomt", "tomträtt", "tomtratt",
+                "festet tomt", "festetomt", "punktfeste", "bortfestet", "lejet grund",
+                "på lejet", "leigulóð", "leiguloð", "leigulod",
+            ],
+        )
+}
+
+/// True when the listing is NOT a liveable dwelling at all — a garden-allotment
+/// cabin (SE kolonistuga / koloniförening), a touring caravan, or a tiny shed on
+/// a leisure plot. These ultra-cheap "fritidshus" are the dominant false positive.
+fn is_not_a_dwelling(l: &Listing, desc: &str) -> bool {
+    if has(
+        desc,
+        &[
+            "kolonistug", "koloniföre", "kolonifore", "kolonihave", "kolonilott", "koloniträd",
+            "kolonitrad", "husvagn", "campingvogn", "campingvagn", "husbil", "spiktält", "spiktalt",
+        ],
+    ) {
+        return true;
+    }
+    // A leisure-classed listing with a trivial dwelling footprint is a shed / plot,
+    // not a year-round home.
+    matches!(property_family(l.property_type.as_deref().unwrap_or("")), "leisure" | "plot")
+        && l.living_area_m2.map(|a| a < 15.0).unwrap_or(false)
+}
+
 /// Clearly more than one living floor — for the single-storey hard filter.
 /// `kellari` (basement) alone does NOT count; only explicit multi-level wording or
 /// an upstairs/downstairs (yläkerta/alakerta) does.
@@ -253,16 +314,32 @@ fn winter_signal(l: &Listing, desc: &str) -> f64 {
     if is_buildable_plot(l, desc) {
         return 0.15;
     }
-    let year_round = has(desc, &[
-        "talviasutt", "ympärivuoti", "ympäri vuoden", "talvikäyt", "talviasun",
+    // An explicit conversion to permanent residential use overrides a historical
+    // "built as a summer cabin" mention (origin is not current use) — checked first.
+    if has(desc, &[
         "asuinkäyttöön muut", "vakituiseksi muut", "muutettu vakituise", "muutettu asuinkäyt",
-    ]);
-    if !year_round
-        && has(desc, &["ei talviasut", "vain kesä", "kesäkäyt", "kesämök", "kesäasun", "kesahuvila", "ei lämmi"])
-    {
+        "ombyggd till åretrunt", "godkänd som åretrunt", "godkänt för åretrunt",
+        "omgjort til helår", "godkjent for helår",
+    ]) {
+        return 1.0;
+    }
+    // Summer-only or NEGATED winterization next, so "ej vinterbonad" / "ikke helårs"
+    // aren't misread as the year-round keyword they contain.
+    if has(desc, &[
+        "ei talviasut", "vain kesä", "kesäkäyt", "kesämök", "kesäasun", "kesahuvila", "ei lämmi",
+        // SE / NO / DK / IS summer-only + negations
+        "sommarstuga", "ej vinterbonad", "ouppvärmd", "endast sommar", "sommarboende",
+        "sommerhytte", "ikke helårs", "kun sommer", "sommerbruk", "uisolert",
+        "sommerhus", "sumarhús", "sumarbúst", "ekki heilsárs",
+    ]) {
         return 0.1;
     }
-    if year_round {
+    // Plain positive winterization wording.
+    if has(desc, &[
+        "talviasutt", "ympärivuoti", "ympäri vuoden", "talvikäyt", "talviasun",
+        "vinterbonad", "vinterbonat", "åretrunt", "aretrunt", "helårs", "helarsbolig",
+        "helårsbolig", "vinterisolert", "isolert for helår", "heilsárs", "heilsars",
+    ]) {
         return 1.0;
     }
     let is_house = l
@@ -306,10 +383,22 @@ fn condition_signal(l: &Listing, desc: &str) -> f64 {
     if is_buildable_plot(l, desc) {
         return 0.2;
     }
-    if has(desc, &["remontin tarp", "remontoitav", "peruskorjauksen tarp", "peruskorjattava", "huonokuntoi", "korjausvel", "kosteusvaur", "homevaur", "asumiskelvot"]) {
+    if has(desc, &[
+        "remontin tarp", "remontoitav", "peruskorjauksen tarp", "peruskorjattava", "huonokuntoi",
+        "korjausvel", "kosteusvaur", "homevaur", "asumiskelvot",
+        // SE / NO renovation-project
+        "renoveringsbehov", "renoveringsobjekt", "i behov av renover", "totalrenoveras",
+        "oppussingsobjekt", "totaloppussing", "rivningsobjekt", "trenger oppussing",
+    ]) {
         return 0.2;
     }
-    let mut base: f64 = if has(desc, &["muuttovalmi", "hyväkuntoi", "erinomaisessa kun", "erinomainen kun", "täysin remontoi", "remontoitu", "peruskorjattu", "uudisveroi", "hyvin pidet"]) {
+    let mut base: f64 = if has(desc, &[
+        "muuttovalmi", "hyväkuntoi", "erinomaisessa kun", "erinomainen kun", "täysin remontoi",
+        "remontoitu", "peruskorjattu", "uudisveroi", "hyvin pidet",
+        // SE / NO move-in / renovated
+        "nyrenoverad", "totalrenoverad", "välhållen", "valhallen", "inflyttningsklar",
+        "nyoppusset", "totalrenovert", "velholdt", "moderne standard", "nymalt",
+    ]) {
         0.95
     } else {
         match l.year_built {
@@ -321,17 +410,18 @@ fn condition_signal(l: &Listing, desc: &str) -> f64 {
             None => 0.55,
         }
     };
-    if l.condition_class.as_deref().map(|c| c.contains("hyvä") || c.contains("erinomai")).unwrap_or(false) {
+    // Fold the kuntoluokka so the diacritic FI spelling ("hyvä", "välttävä") and the
+    // normalized ASCII form non-FI sources carry ("hyva", "valttava") both register.
+    let cc = l.condition_class.as_deref().map(fold_ascii).unwrap_or_default();
+    if cc.contains("hyva") || cc.contains("erinomai") {
         base = base.max(0.85);
     }
     // The buyer wants kuntoluokka hyvä or better, so "tyydyttävä" (satisfactory)
     // and below are kept under the Required threshold and thus hard-dropped.
-    if l.condition_class.as_deref().map(|c| c.contains("tyydyttäv")).unwrap_or(false)
-        || has(desc, &["tyydyttäväss", "tyydyttävä kun"])
-    {
+    if cc.contains("tyydyttav") || has(desc, &["tyydyttäväss", "tyydyttävä kun"]) {
         base = base.min(0.45);
     }
-    if l.condition_class.as_deref().map(|c| c.contains("huono") || c.contains("välttäv")).unwrap_or(false) {
+    if cc.contains("huono") || cc.contains("valttav") {
         base = base.min(0.35);
     }
     base
@@ -460,19 +550,17 @@ fn passes_structural(spec: &Spec, l: &Listing) -> bool {
             return false;
         }
     }
-    if spec.owned_plot
-        && l.plot_ownership
-            .as_deref()
-            .map(|o| o.contains("vuokra"))
-            .unwrap_or(false)
-    {
+    let desc = l.description.as_deref().unwrap_or("").to_lowercase();
+    // A garden-allotment cabin / caravan / tiny shed is never the year-round home
+    // the buyer wants — the dominant false positive among ultra-cheap listings.
+    if is_not_a_dwelling(l, &desc) {
         return false;
     }
-    if spec.single_floor {
-        let desc = l.description.as_deref().unwrap_or("").to_lowercase();
-        if is_multi_floor(&desc) {
-            return false;
-        }
+    if spec.owned_plot && is_leased_plot(l, &desc) {
+        return false;
+    }
+    if spec.single_floor && is_multi_floor(&desc) {
+        return false;
     }
     true
 }
@@ -548,6 +636,16 @@ fn off_spec_reasons(spec: &Spec, l: &Listing, s: &Signals) -> Vec<String> {
 /// area benchmark, structurally sound (not a teardown/summer shack, risk within the
 /// near-miss ceiling). Off-spec status is decided by the caller (passes_structural
 /// && !passes_preferences); this judges whether the steal is worth surfacing at all.
+/// A non-Finnish home comfortably within budget (≤ 85 % of the ceiling) — the value
+/// signal for the Nordic markets that have no open sold-price benchmark for fairness.
+fn cheap_within_budget(spec: &Spec, l: &Listing) -> bool {
+    l.country_enum() != crate::country::Country::Fi
+        && l.price_eur
+            .zip(spec.price_max)
+            .map(|(p, max)| max > 0 && (p as f64) <= 0.85 * max as f64)
+            .unwrap_or(false)
+}
+
 fn is_value_outlier(spec: &Spec, l: &Listing, s: &Signals, risk: u32) -> bool {
     // A *believable* exceptional discount: 30–80 % under the area benchmark. A ratio
     // under 0.2 (>80 % "off") is almost always bad data — a price-on-request
@@ -555,23 +653,54 @@ fn is_value_outlier(spec: &Spec, l: &Listing, s: &Signals, risk: u32) -> bool {
     // micro-area — not a real steal, so it must not headline the lane.
     const MIN_RATIO: f64 = 0.2;
     const MAX_RATIO: f64 = 0.7;
-    let steal = l
-        .fairness
-        .as_ref()
-        .and_then(|f| f.ratio)
-        .map(|r| (MIN_RATIO..MAX_RATIO).contains(&r))
-        .unwrap_or(false);
+    let steal = match l.fairness.as_ref().and_then(|f| f.ratio) {
+        Some(r) => (MIN_RATIO..MAX_RATIO).contains(&r),
+        // No benchmark (non-FI): being a real, sound home well within budget is the find.
+        None => cheap_within_budget(spec, l),
+    };
     let desc = l.description.as_deref().unwrap_or("");
-    // A real, evaluable home — not a near-empty placeholder row or a shed/plot.
-    let real_home = l.living_area_m2.map(|a| a >= 30.0).unwrap_or(false) && desc.len() >= 40;
-    let sound = !is_buildable_plot(l, &desc.to_lowercase()) && s.condition >= 0.4 && s.winter >= 0.3;
+    // A real, evaluable home — not a near-empty placeholder row or a shed/plot. For the
+    // non-FI markets whose detail pages bot-block (no prose), a real-sized home still
+    // surfaces as a candidate when the coordinate-derived lake shore confirms the #1
+    // want (or, in lakeless Iceland, on its own merits) — so the buyer sees it and can
+    // open the real listing, even though it can never reach the GATE without evidence.
+    let non_fi = l.country_enum() != crate::country::Country::Fi;
+    let real_home = (l.living_area_m2.map(|a| a >= 30.0).unwrap_or(false) && desc.len() >= 40)
+        || (non_fi
+            && l.living_area_m2.map(|a| a >= 25.0).unwrap_or(false)
+            && (own_lake_shore(l) || !lake_country(l)));
+    // Not a teardown / summer-only shack, and not the worst condition. The lane is for
+    // off-spec finds, so a fair-condition (välttävä) home still qualifies — its caveats
+    // are spelled out in `off_spec_reasons`, not hidden by dropping it. Year-round-ness
+    // is the one hard floor: a summer-only place is not a home the buyer can live in.
+    let sound = !is_buildable_plot(l, &desc.to_lowercase()) && s.condition >= 0.35 && s.winter >= 0.3;
     let risk_ok = risk <= spec.near_miss_risk.unwrap_or(50);
-    // If it's giving up the lake shore, it must earn the spot another way: seclusion.
-    // A house with no own lake AND unconfirmed privacy (close neighbours) is not worth
-    // surfacing. (Low bug pressure is the other half, enforced on the Worker which owns
-    // the geodata bug signal.)
-    let secluded = own_lake_shore(l) || s.privacy >= 0.6;
+    // In Finland (deep, well-described stock) an off-spec find must earn its place with
+    // seclusion or an own lake. The sparser non-FI markets are exploratory — surface a
+    // real, affordable, year-round home there even without confirmed privacy, with its
+    // caveats shown — so the buyer can see what's possible.
+    let secluded =
+        own_lake_shore(l) || s.privacy >= 0.6 || l.country_enum() != crate::country::Country::Fi;
     steal && real_home && sound && risk_ok && secluded
+}
+
+/// Why a home that passes every hard criterion still isn't a CONFIRMED gate — the
+/// caveat shown on a demoted-gate value outlier so the buyer knows what to verify
+/// before treating it as a perfect match. By construction at least one applies (the
+/// caller only invokes this when the gate's confirmation checks failed).
+fn gate_caveats(spec: &Spec, l: &Listing, s: &Signals) -> Vec<String> {
+    let mut out = Vec::new();
+    let has_evidence = l.description.as_deref().map(|d| d.len() >= 40).unwrap_or(false);
+    let is_house = property_family(l.property_type.as_deref().unwrap_or("")) == "house";
+    if !has_evidence {
+        out.push("card-only listing — condition & year-round use unverified".into());
+    } else if matches!(spec.winterized, Pref::Required) && s.winter < 0.85 && !is_house {
+        out.push("year-round use not stated — confirm with the seller".into());
+    }
+    if out.is_empty() {
+        out.push("unconfirmed on a key requirement — verify before viewing".into());
+    }
+    out
 }
 
 /// Confirmed move-in soundness from the structured kuntoluokka. The near-miss band
@@ -625,34 +754,66 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
         let passes = passes_struct && passes_preferences(spec, &l, &s);
         // A value outlier clears every structural filter but misses a lifestyle
         // preference; gate the cheap fairness pre-check before paying for risk.
-        let outlier_eligible = !passes
-            && passes_struct
-            && l.fairness
-                .as_ref()
-                .map(|f| matches!(f.band.as_str(), "underpriced" | "below_market"))
-                .unwrap_or(false);
-        if !passes && !pinned && !outlier_eligible {
+        // The value signal: an area benchmark says underpriced (Finland, where MML
+        // sold-price data exists), OR — for the other Nordic markets that have no open
+        // sold-price source — the home is simply well within budget. Either way it's a
+        // real find worth surfacing; it can never reach the GATE (that needs every
+        // confirmed preference), only the value-outlier lane.
+        let value_band = l
+            .fairness
+            .as_ref()
+            .map(|f| matches!(f.band.as_str(), "underpriced" | "below_market"))
+            .unwrap_or(false);
+        let valueish = value_band || cheap_within_budget(spec, &l);
+        if !passes && !pinned && !(passes_struct && valueish) {
             continue;
         }
         let assessment = risk::assess(&l.to_risk_input(s.shore >= PRESENT), 2026);
-        let within_gate = passes && spec.max_risk.map(|m| assessment.score <= m).unwrap_or(true);
+        // A GATE match is a CONFIRMED perfect match — the Telegram-alert tier. It can
+        // only be claimed when there's enough evidence to have actually checked the
+        // soft requirements (condition, winter, privacy): i.e. a real description.
+        // Card-only listings (e.g. Swedish Booli, whose detail pages bot-block) can
+        // never false-alert as perfect; they surface as candidates for review instead.
+        let has_evidence = l.description.as_deref().map(|d| d.len() >= 40).unwrap_or(false);
+        // For a GATE (Telegram-alert "perfect match"), a LEISURE cottage must have its
+        // year-round use explicitly confirmed — a detached house is year-round by type,
+        // but a cabin defaulting to "maybe winterized" is a candidate, not a confirmed
+        // match. (Condition still uses the spec's own threshold via passes_preferences.)
+        let winter_confirmed = !matches!(spec.winterized, Pref::Required)
+            || s.winter >= 0.85
+            || property_family(l.property_type.as_deref().unwrap_or("")) == "house";
+        let within_gate = passes
+            && has_evidence
+            && winter_confirmed
+            && spec.max_risk.map(|m| assessment.score <= m).unwrap_or(true);
         let within_near = passes
             && !within_gate
             && confirmed_sound(&l)
             && spec.near_miss_risk.map(|n| assessment.score <= n).unwrap_or(false);
-        let candidate_outlier = outlier_eligible
-            && !pinned
+        // The candidate lane catches two kinds of real home that aren't a confirmed
+        // gate: a genuinely off-spec find (fails a preference) AND a "demoted gate" —
+        // one that passes every hard criterion but can't be CONFIRMED as perfect (a
+        // card-only row, or a cabin whose year-round use is merely plausible). Both are
+        // worth the buyer's eyes; neither may ever fire the Telegram alert.
+        let candidate_outlier = !pinned
             && !within_gate
             && !within_near
+            && passes_struct
+            && valueish
             && is_value_outlier(spec, &l, &s, assessment.score);
         let off_spec = if candidate_outlier {
-            off_spec_reasons(spec, &l, &s)
+            let mut r = off_spec_reasons(spec, &l, &s);
+            // A demoted gate passes every preference, so it has no off-spec reason —
+            // surface the CONFIRMATION caveat instead, so it never shows blank.
+            if r.is_empty() {
+                r = gate_caveats(spec, &l, &s);
+            }
+            r
         } else {
             Vec::new()
         };
-        // A value outlier must be able to say WHY it's off-spec; if the only failing
-        // preference is an Avoided-trait-present (no positive reason to display), don't
-        // surface it with a blank justification.
+        // A value outlier must be able to say WHY it isn't a confirmed match; if there's
+        // nothing to display, don't surface it with a blank justification.
         let value_outlier = candidate_outlier && !off_spec.is_empty();
         if !pinned && !within_gate && !within_near && !value_outlier {
             continue;
@@ -728,6 +889,7 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
                 id: c.listing.id,
                 title: c.listing.title(),
                 municipality: c.listing.municipality.clone(),
+                country: c.listing.country_enum().code().to_string(),
                 price_eur: c.listing.price_eur,
                 property_type: c.listing.property_type.clone(),
                 url: c.listing.url.clone(),
@@ -859,6 +1021,7 @@ mod tests {
             condition_class: Some("hyvä".into()),
             price_eur: Some(90_000),
             year_built: Some(year),
+            description: Some("Hyväkuntoinen omakotitalo omalla järvenrannalla, talviasuttava.".into()),
             ..Default::default()
         };
         let teardown = |id| Listing { description: Some("purkukuntoinen mökki".into()), ..mk(id, 1950) };
@@ -1092,5 +1255,73 @@ mod tests {
         assert!(own_lake_shore(&Listing { shore: Some("oma_ranta".into()), ..Default::default() }));
         assert!(!own_lake_shore(&Listing { shore: Some("no_shore".into()), ..Default::default() }));
         assert!(!own_lake_shore(&Listing { shore: None, ..Default::default() }));
+    }
+
+    #[test]
+    fn leased_plot_is_a_deal_breaker_across_countries() {
+        let spec = Spec { property_types: vec!["mökki".into()], owned_plot: true, ..Default::default() };
+        let leisure = |c: &str, d: &str| Listing {
+            country: Some(c.into()), property_type: Some("leisure".into()),
+            price_eur: Some(40_000), living_area_m2: Some(45.0), description: Some(d.into()), ..Default::default()
+        };
+        assert!(!passes_structural(&spec, &leisure("SE", "Trevligt fritidshus. Det här är ett arrende.")), "SE arrende must fail owned_plot");
+        assert!(!passes_structural(&spec, &leisure("NO", "Koselig hytte på festet tomt.")), "NO festet tomt must fail owned_plot");
+        assert!(passes_structural(&spec, &leisure("SE", "Fritidshus med äganderätt.")), "owned (äganderätt) must pass");
+    }
+
+    #[test]
+    fn garden_allotments_and_tiny_sheds_are_not_dwellings() {
+        let spec = Spec { property_types: vec!["mökki".into()], ..Default::default() };
+        let koloni = Listing {
+            country: Some("SE".into()), property_type: Some("leisure".into()), price_eur: Some(11_000),
+            living_area_m2: Some(30.0), description: Some("Kolonistuga i Falköpings koloniförening.".into()), ..Default::default()
+        };
+        assert!(!passes_structural(&spec, &koloni), "a kolonistuga is not a dwelling");
+        let shed = Listing {
+            country: Some("SE".into()), property_type: Some("leisure".into()), price_eur: Some(11_000),
+            living_area_m2: Some(5.0), ..Default::default()
+        };
+        assert!(!passes_structural(&spec, &shed), "a 5 m² leisure plot is not a dwelling");
+        let cabin = Listing {
+            country: Some("SE".into()), property_type: Some("leisure".into()), price_eur: Some(40_000),
+            living_area_m2: Some(45.0), description: Some("Mysig stuga.".into()), ..Default::default()
+        };
+        assert!(passes_structural(&spec, &cabin), "a real 45 m² cabin passes structurally");
+    }
+
+    #[test]
+    fn card_only_listing_is_a_candidate_never_a_gate() {
+        // A non-FI listing that satisfies every structured signal but has NO description
+        // (a card-only Booli/Finn row whose detail page bot-blocks) must NOT be a GATE
+        // (Telegram-alert) match — there is no evidence to confirm condition/winter — but
+        // it should still surface as a near-miss candidate for human/agent review.
+        let defaults = CostDefaults::default();
+        let spec = Spec {
+            shore: Pref::Required, winterized: Pref::Required, condition: Pref::Required,
+            max_risk: Some(25), near_miss_risk: Some(50), cash: true, ..Default::default()
+        };
+        let card = Listing {
+            id: 1, country: Some("SE".into()), shore: Some("oma_ranta".into()),
+            property_type: Some("detached".into()), condition_class: Some("hyvä".into()),
+            price_eur: Some(80_000), year_built: Some(2015), living_area_m2: Some(90.0),
+            description: None,
+            ..Default::default()
+        };
+        let scored = rank(&spec, vec![card], &defaults);
+        assert!(
+            scored.iter().all(|s| s.near_miss || s.value_outlier || s.pinned),
+            "a card-only listing must never be a confirmed GATE match"
+        );
+    }
+
+    #[test]
+    fn summer_only_reads_across_languages() {
+        let w = |c: &str, d: &str| {
+            let l = Listing { country: Some(c.into()), property_type: Some("leisure".into()), description: Some(d.into()), ..Default::default() };
+            winter_signal(&l, &d.to_lowercase())
+        };
+        assert!(w("SE", "Mysig sommarstuga, ej vinterbonad.") < 0.3, "SE sommarstuga reads summer-only");
+        assert!(w("NO", "Sommerhytte, ikke helårs.") < 0.3, "NO sommerhytte reads summer-only");
+        assert!(w("SE", "Vinterbonad stuga för åretruntboende.") >= 0.9, "SE vinterbonad reads year-round");
     }
 }

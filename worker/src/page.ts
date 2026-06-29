@@ -10,6 +10,8 @@ export interface PublishedPayload {
   id: number;
   title: string;
   municipality: string | null;
+  /** ISO country code (FI/SE/NO/DK/IS); defaults to FI for pre-Nordic pages. */
+  country?: string | null;
   address: string | null;
   price_eur: number | null;
   property_type: string | null;
@@ -165,6 +167,39 @@ function tooBuggy(bp: PublishedPayload["bug_pressure"]): boolean {
   return bp != null && (bp.mosquito.band !== "matala" || bp.blackfly.band !== "matala");
 }
 
+/** Take up to `limit` items round-robin across countries, preserving each country's
+ *  incoming (already value-sorted) order, so the cross-Nordic "what's possible" lane
+ *  shows finds from every market instead of being swept by one country's stock. */
+function balanceByCountry(items: PublishedPayload[], limit: number): PublishedPayload[] {
+  const lanes = new Map<string, PublishedPayload[]>();
+  for (const p of items) {
+    const k = (p.country ?? "FI").toUpperCase();
+    (lanes.get(k) ?? lanes.set(k, []).get(k)!).push(p);
+  }
+  const queues = [...lanes.values()];
+  const out: PublishedPayload[] = [];
+  let progressed = true;
+  while (out.length < limit && progressed) {
+    progressed = false;
+    for (const q of queues) {
+      const next = q.shift();
+      if (next) {
+        out.push(next);
+        progressed = true;
+        if (out.length >= limit) break;
+      }
+    }
+  }
+  return out;
+}
+
+const FLAGS: Record<string, string> = { FI: "🇫🇮", SE: "🇸🇪", NO: "🇳🇴", DK: "🇩🇰", IS: "🇮🇸" };
+
+/** Flag emoji for a listing's country (defaults to Finland for legacy pages). */
+function flagOf(country: string | null | undefined): string {
+  return FLAGS[(country ?? "FI").toUpperCase()] ?? "🏳️";
+}
+
 /** Own lake (järvi) shore — mirrors the ranker's `own_lake_shore`: owned shore on a
  *  water body that isn't a river/pond/sea (unknown body counts as a lake). */
 function hasLakeShore(p: PublishedPayload): boolean {
@@ -305,12 +340,14 @@ export function renderIndexPage(
   // These off-spec finds must EARN their place: secluded (gated in the ranker) and
   // essentially bug-free — drop anything above a low bug reading, then lead with the
   // least buggy. Applies to every outlier, lake or not: a buggy find is not wanted.
-  const outliers = items
-    .filter((p) => p.tier === "outlier" && !tooBuggy(p.bug_pressure))
-    .sort(
-      (a, b) => bugScoreOf(a.bug_pressure) - bugScoreOf(b.bug_pressure) || (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9),
-    )
-    .slice(0, 12);
+  const outliers = balanceByCountry(
+    items
+      .filter((p) => p.tier === "outlier" && !tooBuggy(p.bug_pressure))
+      .sort(
+        (a, b) => bugScoreOf(a.bug_pressure) - bugScoreOf(b.bug_pressure) || (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9),
+      ),
+    12,
+  );
   const cardOf = (p: PublishedPayload): string => {
     const cover = p.gallery[0] ?? "";
     const place = p.municipality ?? p.title ?? `#${p.id}`;
@@ -344,7 +381,7 @@ export function renderIndexPage(
         : "";
     return `<a class="tile${isGate ? "" : " almost"}" href="${origin}/kontu/${p.id}">
         <div class="thumb">${cover ? `<img src="${esc(cover)}" loading="${isGate ? "eager" : "lazy"}" decoding="async" alt="" referrerpolicy="no-referrer">` : ""}${tag}</div>
-        <div class="meta"><div class="place">${esc(place)}</div>
+        <div class="meta"><div class="place">${flagOf(p.country)} ${esc(place)}</div>
           <div class="row"><span class="p">${eur(p.price_eur)}</span><span class="m">${thousands(monthly)} €/kk · riski ${p.risk.score}</span></div>
           ${merits}<div class="facts2">${facts}</div>${offspec}
         </div></a>`;
@@ -781,7 +818,7 @@ h2{display:flex;justify-content:space-between;align-items:baseline;gap:.6rem;fon
 ${p.gallery.length > 1 ? `<button class="photocount" id="pcount" type="button">▦ ${p.gallery.length} kuvaa</button>` : ""}
 </div>
 <div class="head">
-  <div class="sub">${esc(sub)}</div>
+  <div class="sub">${flagOf(p.country)} ${esc(sub)}</div>
   <h1>${esc(title)}</h1>
   <div class="price">${eur(p.price_eur)}</div>
   ${cashLine}

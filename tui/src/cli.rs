@@ -985,21 +985,14 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
     // Headroom above the ~12 the site shows: the Worker (which owns the geodata bug
     // signal) drops the bug-ridden and leads with the least buggy, so it needs spare
     // candidates to choose from — the ranker can't see bug pressure to pre-pick them.
-    const OUTLIER_LIMIT: usize = 20;
+    const OUTLIER_LIMIT: usize = 24;
     let ranked: Vec<_> = crate::matching::rank(&spec, live, &defaults)
         .into_iter()
         .filter(|m| m.score >= fit_floor)
         .collect();
-    let (mut outliers, mut matches): (Vec<_>, Vec<_>) =
+    let (outliers, mut matches): (Vec<_>, Vec<_>) =
         ranked.into_iter().partition(|m| m.value_outlier);
-    outliers.sort_by(|a, b| {
-        a.fairness_ratio
-            .unwrap_or(f64::INFINITY)
-            .partial_cmp(&b.fairness_ratio.unwrap_or(f64::INFINITY))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    outliers.truncate(OUTLIER_LIMIT);
-    matches.extend(outliers);
+    matches.extend(select_outliers(outliers, OUTLIER_LIMIT));
 
     let mut seen = watch::load_seen()?;
     if a.seed {
@@ -1081,28 +1074,31 @@ fn require_telegram(cfg: &Config) -> Result<()> {
 }
 
 /// Fetch the candidate listings the spec ranks over. Fetched per
-/// (municipality × property_type) and merged, so a cheapest-N truncation can
-/// never drop a relevant listing — e.g. a flood of cheap plots can't crowd out
-/// houses, and one municipality can't crowd out another.
+/// (country × municipality) and merged, so a cheapest-N truncation can never drop a
+/// relevant listing — a flood of cheap plots in one country can't crowd out houses
+/// in another. The property TYPE is NOT filtered server-side: the spec types are
+/// Finnish tokens (omakotitalo/mökki) that wouldn't match the normalized SE/NO/DK/IS
+/// types, so the matcher's `property_family` does the typing on the full candidate set.
 async fn fetch_spec_listings(client: &KontuClient, spec: &Spec, scan: usize) -> Result<Vec<Listing>> {
     let base = spec_to_filter(spec);
+    let countries: Vec<Option<String>> = if spec.countries.is_empty() {
+        crate::country::Country::ALL.iter().map(|c| Some(c.code().to_string())).collect()
+    } else {
+        spec.countries.iter().map(|c| Some(c.clone())).collect()
+    };
     let munis: Vec<Option<String>> = if spec.municipalities.is_empty() {
         vec![None]
     } else {
         spec.municipalities.iter().map(|m| Some(m.clone())).collect()
     };
-    let types: Vec<Option<String>> = if spec.property_types.is_empty() {
-        vec![None]
-    } else {
-        spec.property_types.iter().map(|t| Some(t.clone())).collect()
-    };
     let mut all = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for m in &munis {
-        for t in &types {
+    for c in &countries {
+        for m in &munis {
             let mut f = base.clone();
+            f.country = c.clone();
             f.municipality = m.clone();
-            f.property_type = t.clone();
+            f.property_type = None;
             let page = client.list_listings(&f, SortColumn::Price, false, scan as u32, 0).await?;
             for l in page.listings {
                 if seen.insert(l.id) {
@@ -1112,6 +1108,47 @@ async fn fetch_spec_listings(client: &KontuClient, spec: &Spec, scan: usize) -> 
         }
     }
     Ok(all)
+}
+
+/// Pick the value-outlier lane the showcase displays: country-balanced, best-first.
+/// Within a country the deepest discount leads (fairness ratio ascending; the
+/// non-FI markets without a sold-price benchmark fall back to the lowest asking
+/// price). Across countries we round-robin, so the cross-Nordic "what's possible"
+/// view shows finds from every market instead of being swept by one country's
+/// steals. Caps the total so the lane never floods the page or the publish cycle.
+fn select_outliers(outliers: Vec<crate::matching::Scored>, limit: usize) -> Vec<crate::matching::Scored> {
+    use std::collections::BTreeMap;
+    let mut by_country: BTreeMap<String, Vec<crate::matching::Scored>> = BTreeMap::new();
+    for o in outliers {
+        by_country.entry(o.country.clone()).or_default().push(o);
+    }
+    for lane in by_country.values_mut() {
+        lane.sort_by(|a, b| {
+            let av = a.fairness_ratio.unwrap_or(f64::INFINITY);
+            let bv = b.fairness_ratio.unwrap_or(f64::INFINITY);
+            av.partial_cmp(&bv)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.price_eur.unwrap_or(i64::MAX).cmp(&b.price_eur.unwrap_or(i64::MAX)))
+        });
+    }
+    let mut lanes: Vec<_> = by_country.into_values().map(|v| v.into_iter()).collect();
+    let mut out = Vec::with_capacity(limit);
+    while out.len() < limit {
+        let mut progressed = false;
+        for lane in lanes.iter_mut() {
+            if let Some(item) = lane.next() {
+                out.push(item);
+                progressed = true;
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    out
 }
 
 /// Ensure every pinned listing is in the candidate set even if it falls outside
@@ -1444,6 +1481,7 @@ fn build_publish_payload(
         "id": l.id,
         "title": l.title(),
         "municipality": l.municipality,
+        "country": l.country_enum().code(),
         "address": l.address,
         "price_eur": l.price_eur,
         "property_type": l.property_type,
@@ -1727,5 +1765,60 @@ fn trunc(s: &str, max: usize) -> String {
     } else {
         let cut: String = s.chars().take(max.saturating_sub(1)).collect();
         format!("{cut}…")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::matching::Scored;
+
+    fn outlier(id: i64, country: &str, price: i64) -> Scored {
+        Scored {
+            id,
+            title: String::new(),
+            municipality: None,
+            country: country.into(),
+            price_eur: Some(price),
+            property_type: None,
+            url: String::new(),
+            score: 0.0,
+            npv_cost: 0.0,
+            monthly: 0.0,
+            monthly_living: 0.0,
+            risk: 0,
+            pinned: false,
+            near_miss: false,
+            value_outlier: true,
+            off_spec: vec![],
+            fairness_ratio: None,
+            reasons: vec![],
+        }
+    }
+
+    #[test]
+    fn select_outliers_balances_across_countries() {
+        // Finland floods the lane; the round-robin must still surface every market.
+        let mut pool: Vec<Scored> = (0..15).map(|i| outlier(i, "FI", 10_000 + i)).collect();
+        pool.extend((0..6).map(|i| outlier(100 + i, "SE", 20_000 + i)));
+        pool.extend((0..2).map(|i| outlier(200 + i, "NO", 30_000 + i)));
+        pool.extend((0..1).map(|i| outlier(300 + i, "IS", 40_000 + i)));
+        let picked = select_outliers(pool, 12);
+        let countries: std::collections::BTreeSet<_> = picked.iter().map(|p| p.country.clone()).collect();
+        assert!(picked.len() <= 12);
+        assert!(countries.contains("SE") && countries.contains("NO") && countries.contains("IS"),
+            "every non-FI market must be represented, got {countries:?}");
+        let fi = picked.iter().filter(|p| p.country == "FI").count();
+        assert!(fi <= 6, "Finland must not dominate the balanced lane (got {fi}/12)");
+    }
+
+    #[test]
+    fn select_outliers_within_a_country_leads_with_the_deepest_steal() {
+        let mut a = outlier(1, "FI", 90_000);
+        a.fairness_ratio = Some(0.6);
+        let mut b = outlier(2, "FI", 50_000);
+        b.fairness_ratio = Some(0.3);
+        let picked = select_outliers(vec![a, b], 12);
+        assert_eq!(picked[0].id, 2, "the steeper discount (lower ratio) leads its country lane");
     }
 }

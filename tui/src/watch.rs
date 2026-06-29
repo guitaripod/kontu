@@ -186,6 +186,7 @@ mod tests {
             id: 1,
             title: "Talo & <tontti>".into(),
             municipality: Some("Outokumpu".into()),
+            country: "FI".into(),
             price_eur: Some(89_000),
             property_type: Some("omakotitalo".into()),
             url: "https://x.fi/k?a=1&b=2".into(),
