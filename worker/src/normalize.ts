@@ -8,6 +8,8 @@ export interface NormalizedListing {
   portal: string;
   portal_listing_id: string;
   url: string;
+  /** ISO country code of the market (FI/SE/NO/DK/IS). */
+  country: string | null;
 
   property_type: string | null;
   holding_form: string | null;
@@ -343,15 +345,85 @@ function splitAddress(address: string | null): { street: string | null; houseNo:
   return { street: address.trim() || null, houseNo: null };
 }
 
+/**
+ * Build a full NormalizedListing from a partial object, defaulting every absent
+ * field. Lets ingestion that runs OUTSIDE the Worker (on a residential IP, e.g.
+ * Swedish Booli / Norwegian Finn, which the datacenter IP can't reach) POST
+ * already-normalized rows to `/api/import-normalized` and have them upserted.
+ */
+export function coerceNormalized(raw: Record<string, unknown>): NormalizedListing {
+  const s = (k: string): string | null => (typeof raw[k] === "string" && raw[k] !== "" ? (raw[k] as string) : null);
+  const n = (k: string): number | null => (typeof raw[k] === "number" && Number.isFinite(raw[k]) ? (raw[k] as number) : null);
+  return {
+    portal: s("portal") ?? "unknown",
+    portal_listing_id: s("portal_listing_id") ?? "",
+    url: s("url") ?? "",
+    country: normalizeCountry(s("country")) ?? "FI",
+    property_type: s("property_type"),
+    holding_form: s("holding_form"),
+    kiinteistotunnus: s("kiinteistotunnus"),
+    address: s("address"),
+    municipality: s("municipality"),
+    postal_code: s("postal_code"),
+    district: s("district"),
+    lat: n("lat"),
+    lon: n("lon"),
+    price_eur: n("price_eur"),
+    debt_free_price_eur: n("debt_free_price_eur"),
+    debt_share_eur: n("debt_share_eur"),
+    price_per_m2: n("price_per_m2"),
+    maintenance_charge_eur: n("maintenance_charge_eur"),
+    financing_charge_eur: n("financing_charge_eur"),
+    ground_rent_eur_yr: n("ground_rent_eur_yr"),
+    living_area_m2: n("living_area_m2"),
+    total_area_m2: n("total_area_m2"),
+    plot_area_m2: n("plot_area_m2"),
+    room_count: n("room_count"),
+    room_layout: s("room_layout"),
+    floors: n("floors"),
+    year_built: n("year_built"),
+    occupancy_year: n("occupancy_year"),
+    roof_year: n("roof_year"),
+    pipes_renovated_year: n("pipes_renovated_year"),
+    water_body: s("water_body"),
+    kiinteistovero_eur_yr: n("kiinteistovero_eur_yr"),
+    electricity_eur_yr: n("electricity_eur_yr"),
+    condition_class: s("condition_class"),
+    inspection_status: s("inspection_status"),
+    frame_material: s("frame_material"),
+    facade_material: s("facade_material"),
+    roof_material: s("roof_material"),
+    energy_class: s("energy_class"),
+    e_value: n("e_value"),
+    risk_structures: Array.isArray(raw.risk_structures) ? (raw.risk_structures as string[]) : [],
+    plot_ownership: s("plot_ownership"),
+    lease_end_year: n("lease_end_year"),
+    shore: s("shore"),
+    shore_sauna: n("shore_sauna"),
+    heating_type: s("heating_type"),
+    heat_distribution: s("heat_distribution"),
+    water_supply: s("water_supply"),
+    sewer_system: s("sewer_system"),
+    broadband: s("broadband"),
+    sauna: s("sauna"),
+    parking: s("parking"),
+    road_access: s("road_access"),
+    intended_use: s("intended_use"),
+    zoning_status: s("zoning_status"),
+    description: s("description"),
+    status: s("status") ?? "active",
+    raw_json: typeof raw.raw_json === "string" ? (raw.raw_json as string) : JSON.stringify(raw),
+  };
+}
+
 export function fingerprintFor(row: NormalizedListing): string {
   const { street, houseNo } = splitAddress(row.address);
-  return fingerprint(
-    row.postal_code,
-    street,
-    houseNo,
-    row.living_area_m2,
-    row.room_count,
-    row.floors,
+  // Country-prefix so two same-named addresses in different countries never
+  // dedup together (matches migration 0007's 'FI|' backfill).
+  const country = normalizeCountry(row.country) ?? "FI";
+  return (
+    `${country}|` +
+    fingerprint(row.postal_code, street, houseNo, row.living_area_m2, row.room_count, row.floors)
   );
 }
 
@@ -413,6 +485,7 @@ export function normalizeOikotieCard(card: unknown): NormalizedListing {
     portal: "oikotie",
     portal_listing_id: id,
     url,
+    country: normalizeCountry(oikotieCountry(card)) ?? "FI",
     property_type: normalizePropertyType(buildingTypeName ?? description),
     holding_form: normalizeHoldingForm(
       firstString(c["holdingType"], c["ownershipType"], get(c, "data.holdingType")),
@@ -631,14 +704,27 @@ function applyOikotieDetail(row: NormalizedListing, c: Record<string, unknown>):
   set("pipes_renovated_year", pipeRenovationYear(dv("Tehdyt remontit")));
 }
 
-const FINNISH_COUNTRY = /^(suomi|finland|finnland)$/i;
+/** The Nordic markets kontu covers. */
+export const SUPPORTED_COUNTRIES = new Set(["FI", "SE", "NO", "DK", "IS"]);
 
-/** Country/region names that leak in as a "municipality" for foreign listings. */
+/** Map a free-text country name or ISO code to a supported ISO code, or null. */
+export function normalizeCountry(country: string | null): string | null {
+  if (country == null || country.trim() === "") return null;
+  const c = country.trim().toLowerCase();
+  if (/^(fi|suomi|finland|finnland)$/.test(c)) return "FI";
+  if (/^(se|ruotsi|sweden|sverige)$/.test(c)) return "SE";
+  if (/^(no|norja|norway|norge)$/.test(c)) return "NO";
+  if (/^(dk|tanska|denmark|danmark)$/.test(c)) return "DK";
+  if (/^(is|islanti|iceland|ísland|island)$/.test(c)) return "IS";
+  return null;
+}
+
+/** Country/region names that leak in as a "municipality" for listings abroad. */
 const FOREIGN_MUNICIPALITIES = new Set([
-  "viro", "eesti", "estonia", "espanja", "spain", "ruotsi", "sweden", "sverige",
-  "norja", "norway", "thaimaa", "thailand", "ranska", "france", "philippines",
-  "filippiinit", "portugali", "portugal", "kreikka", "greece", "italia", "italy",
-  "turkki", "turkey", "bulgaria", "unkari", "hungary", "kypros", "cyprus",
+  "viro", "eesti", "estonia", "espanja", "spain", "thaimaa", "thailand",
+  "ranska", "france", "philippines", "filippiinit", "portugali", "portugal",
+  "kreikka", "greece", "italia", "italy", "turkki", "turkey", "bulgaria",
+  "unkari", "hungary", "kypros", "cyprus",
 ]);
 
 /** Oikotie `buildingData.country` (absent for Etuovi). */
@@ -648,14 +734,16 @@ export function oikotieCountry(card: unknown): string | null {
 }
 
 /**
- * True when a normalized listing is outside Finland: an Oikotie card with a
- * non-Finnish `country`, or any listing whose municipality is a country name.
- * Keeps a Finland-only search free of Baltic/Mediterranean listings.
+ * True when a listing is outside the supported Nordic markets — e.g. a Finnish
+ * portal card located in Spain or Estonia. A listing that resolves to FI/SE/NO/
+ * DK/IS is kept; only genuinely-foreign stock is dropped.
  */
 export function isForeignListing(municipality: string | null, country: string | null): boolean {
-  if (country != null && country.trim() !== "" && !FINNISH_COUNTRY.test(country.trim())) {
-    return true;
-  }
+  const iso = normalizeCountry(country);
+  if (iso != null) return !SUPPORTED_COUNTRIES.has(iso);
+  // No usable country: a named-but-unrecognised one is abroad; otherwise fall
+  // back to the municipality (Finnish portals leak a country name as the city).
+  if (country != null && country.trim() !== "") return true;
   return FOREIGN_MUNICIPALITIES.has(asciiFold(municipality));
 }
 
@@ -741,6 +829,7 @@ export function normalizeEtuoviAnnouncement(announcement: unknown): NormalizedLi
     portal: "etuovi",
     portal_listing_id: id,
     url,
+    country: "FI",
     property_type: normalizePropertyType(firstString(a["propertySubtype"]) ?? description),
     holding_form: normalizeHoldingForm(
       firstString(a["holdingType"], a["ownershipType"], get(a, "property.holdingType")),

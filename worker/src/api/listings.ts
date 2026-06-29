@@ -49,6 +49,7 @@ import {
   etuoviPhotoUrls,
   oikotieCountry,
   isForeignListing,
+  coerceNormalized,
 } from "../normalize";
 import { computeFairness, loadMedians, marketIsStale, refreshMarketStats } from "../fairprice";
 
@@ -65,7 +66,7 @@ api.get("/listings", async (c) => {
     risk_structures: parseJsonArray(l.risk_structures),
     days_on_market: daysOnMarket(l.first_seen),
     price_per_m2: l.price_per_m2 ?? derivePpm2(l.price_eur, l.living_area_m2),
-    fairness: computeFairness(medians, l.municipality, l.price_eur),
+    fairness: computeFairness(medians, l.country, l.municipality, l.price_eur),
   }));
   return c.json({ listings: enriched, total });
 });
@@ -93,7 +94,7 @@ api.get("/listings/:id", async (c) => {
       risk_structures: parseJsonArray(listing.risk_structures),
       days_on_market: daysOnMarket(listing.first_seen),
       price_per_m2: listing.price_per_m2 ?? derivePpm2(listing.price_eur, listing.living_area_m2),
-      fairness: computeFairness(medians, listing.municipality, listing.price_eur),
+      fairness: computeFairness(medians, listing.country, listing.municipality, listing.price_eur),
     },
     events,
     photos,
@@ -274,6 +275,45 @@ api.post("/import", async (c) => {
 });
 
 /**
+ * Import pre-normalized listings produced OUTSIDE the Worker — the path for
+ * portals the datacenter IP can't reach (Swedish Booli, Norwegian Finn), which
+ * the CLI fetches + normalizes on the user's residential Nordic IP and POSTs
+ * here. Body: `{ listings: Partial<NormalizedListing>[] }`, each row optionally
+ * carrying `photo_urls: string[]`.
+ */
+api.post("/import-normalized", async (c) => {
+  const body = await c.req.json<{ listings?: unknown[] }>().catch(() => null);
+  const items = Array.isArray(body?.listings) ? body!.listings : [];
+  let inserted = 0;
+  let updated = 0;
+  let skipped = 0;
+  for (const raw of items) {
+    try {
+      if (raw == null || typeof raw !== "object") {
+        skipped++;
+        continue;
+      }
+      const rec = raw as Record<string, unknown>;
+      const n = coerceNormalized(rec);
+      if (!n.portal_listing_id || !n.url || isForeignListing(n.municipality, n.country)) {
+        skipped++;
+        continue;
+      }
+      const res = await upsertListing(c.env.DB, n);
+      await recordDiffEvents(c.env.DB, res);
+      if (res.inserted) inserted++;
+      else updated++;
+      if (Array.isArray(rec.photo_urls)) {
+        await recordCoverPhoto(c.env.DB, res.listingId, rec.photo_urls as string[]);
+      }
+    } catch {
+      skipped++;
+    }
+  }
+  return c.json({ received: items.length, inserted, updated, skipped });
+});
+
+/**
  * Record a listing's cover photo(s) WITHOUT downloading them: store the source
  * URL under a URL-derived R2 key. `/api/photos/:key` fetches the bytes lazily on
  * first view (read-through cache), so imports stay fast and only viewed images
@@ -414,6 +454,7 @@ function parseListingsFilter(
   };
   const order = q("order") === "desc" ? "desc" : q("order") === "asc" ? "asc" : undefined;
   return {
+    country: str("country"),
     municipality: str("municipality"),
     property_type: str("property_type"),
     holding_form: str("holding_form"),

@@ -12,6 +12,7 @@ export interface ListingRow {
   portal: string;
   portal_listing_id: string;
   url: string;
+  country: string | null;
   property_type: string | null;
   holding_form: string | null;
   kiinteistotunnus: string | null;
@@ -132,6 +133,7 @@ export async function setSourceConfig(
 }
 
 export interface ListingsFilter {
+  country?: string;
   municipality?: string;
   property_type?: string;
   holding_form?: string;
@@ -177,6 +179,10 @@ export function buildListingsWhere(f: ListingsFilter): BuiltQuery {
   const clauses: string[] = [];
   const binds: unknown[] = [];
 
+  if (f.country) {
+    clauses.push("l.country = ?");
+    binds.push(f.country.toUpperCase());
+  }
   if (f.municipality) {
     clauses.push("l.municipality = ? COLLATE NOCASE");
     binds.push(f.municipality);
@@ -433,6 +439,7 @@ const LISTING_COLUMNS = [
   "portal",
   "portal_listing_id",
   "url",
+  "country",
   "property_type",
   "holding_form",
   "kiinteistotunnus",
@@ -498,6 +505,7 @@ function listingValues(n: NormalizedListing, propertyId: number | null, hash: st
     n.portal,
     n.portal_listing_id,
     n.url,
+    n.country ?? "FI",
     n.property_type,
     n.holding_form,
     n.kiinteistotunnus,
@@ -586,13 +594,13 @@ export async function upsertProperty(db: D1Database, n: NormalizedListing): Prom
   const { street, houseNo } = splitStreet(n.address);
   await db
     .prepare(
-      "INSERT INTO properties (fingerprint, postal_code, municipality, street, house_no, lat, lon, first_seen, last_seen) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+      "INSERT INTO properties (fingerprint, country, postal_code, municipality, street, house_no, lat, lon, first_seen, last_seen) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
         "ON CONFLICT(fingerprint) DO UPDATE SET last_seen = excluded.last_seen, " +
         "lat = COALESCE(properties.lat, excluded.lat), lon = COALESCE(properties.lon, excluded.lon), " +
         "municipality = COALESCE(properties.municipality, excluded.municipality)",
     )
-    .bind(fp, n.postal_code, n.municipality, street, houseNo, n.lat, n.lon, ts, ts)
+    .bind(fp, n.country ?? "FI", n.postal_code, n.municipality, street, houseNo, n.lat, n.lon, ts, ts)
     .run();
   const row = await db
     .prepare("SELECT id FROM properties WHERE fingerprint = ?")
@@ -634,7 +642,7 @@ export async function upsertListing(db: D1Database, n: NormalizedListing): Promi
   const changed = existing.price_eur !== n.price_eur || existing.status !== n.status;
   await db
     .prepare(
-      "UPDATE listings SET property_id = ?, url = ?, property_type = ?, holding_form = ?, kiinteistotunnus = ?, " +
+      "UPDATE listings SET property_id = ?, url = ?, country = ?, property_type = ?, holding_form = ?, kiinteistotunnus = ?, " +
         "address = ?, municipality = ?, postal_code = ?, district = ?, lat = ?, lon = ?, price_eur = ?, " +
         "debt_free_price_eur = ?, debt_share_eur = ?, price_per_m2 = ?, maintenance_charge_eur = ?, " +
         "financing_charge_eur = ?, ground_rent_eur_yr = ?, living_area_m2 = ?, total_area_m2 = ?, plot_area_m2 = ?, " +
@@ -649,6 +657,7 @@ export async function upsertListing(db: D1Database, n: NormalizedListing): Promi
     .bind(
       propertyId,
       n.url,
+      n.country ?? "FI",
       n.property_type,
       n.holding_form,
       n.kiinteistotunnus,
@@ -989,8 +998,12 @@ export async function listPropertiesNeedingEnrichment(db: D1Database, limit: num
 > {
   const { results } = await db
     .prepare(
+      // FI-only for now: the geo sources (MML Pelias, SYKE, …) are Finnish, so
+      // a Swedish/Norwegian property must not be enriched against them. Per-country
+      // geocoders are the follow-on (docs/expansion/<c>.md §7).
       "SELECT p.id, p.lat, p.lon, p.municipality, p.postal_code, p.street, p.house_no FROM properties p " +
-        "LEFT JOIN location_dossier d ON d.property_id = p.id WHERE d.property_id IS NULL ORDER BY p.last_seen DESC LIMIT ?",
+        "LEFT JOIN location_dossier d ON d.property_id = p.id WHERE d.property_id IS NULL AND p.country = 'FI' " +
+        "ORDER BY p.last_seen DESC LIMIT ?",
     )
     .bind(limit)
     .all<{ id: number; lat: number | null; lon: number | null; municipality: string | null; postal_code: string | null; street: string | null; house_no: string | null }>();

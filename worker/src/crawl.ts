@@ -20,6 +20,20 @@ import {
 import type { NormalizedListing } from "./normalize";
 import { fetchOikotiePage } from "./sources/oikotie";
 import { fetchEtuoviPage } from "./sources/etuovi";
+import { fetchBooliPage } from "./sources/booli";
+import { fetchFinnPage } from "./sources/finn";
+import { fetchBoligsidenPage } from "./sources/boligsiden";
+import { fetchVisirPage } from "./sources/visir";
+
+/** Portals kontu can crawl, and the country each belongs to. */
+const PORTAL_COUNTRY = {
+  oikotie: "FI",
+  etuovi: "FI",
+  booli: "SE",
+  finn: "NO",
+  boligsiden: "DK",
+  visir: "IS",
+} as const;
 
 const DEFAULT_SOURCES = [
   "oikotie:omakotitalo:outokumpu",
@@ -114,7 +128,7 @@ export async function crawlTick(db: D1Database, photos: R2Bucket): Promise<Crawl
 }
 
 interface ParsedSource {
-  portal: "oikotie" | "etuovi";
+  portal: keyof typeof PORTAL_COUNTRY;
   propertyType: string;
   location: string;
 }
@@ -123,9 +137,9 @@ function parseSource(source: string): ParsedSource | null {
   const parts = source.split(":");
   if (parts.length < 3) return null;
   const [portal, propertyType, location] = parts;
-  if (portal !== "oikotie" && portal !== "etuovi") return null;
+  if (portal == null || !(portal in PORTAL_COUNTRY)) return null;
   if (!propertyType || !location) return null;
-  return { portal, propertyType, location };
+  return { portal: portal as keyof typeof PORTAL_COUNTRY, propertyType, location };
 }
 
 interface PageResult {
@@ -136,21 +150,42 @@ interface PageResult {
 }
 
 async function fetchPage(db: D1Database, parsed: ParsedSource, state: CrawlStateRow): Promise<PageResult> {
-  if (parsed.portal === "oikotie") {
-    const r = await fetchOikotiePage(db, {
-      locations: parsed.location,
-      offset: (state.next_page - 1) * PAGE_SIZE,
-      limit: PAGE_SIZE,
-    });
-    return { listings: r.cards, found: r.found, ok: r.ok, error: r.error };
+  const page = state.next_page;
+  switch (parsed.portal) {
+    case "oikotie": {
+      const r = await fetchOikotiePage(db, {
+        locations: parsed.location,
+        offset: (page - 1) * PAGE_SIZE,
+        limit: PAGE_SIZE,
+      });
+      return { listings: r.cards, found: r.found, ok: r.ok, error: r.error };
+    }
+    case "etuovi": {
+      const r = await fetchEtuoviPage(db, {
+        locations: [parsed.location],
+        propertyTypes: [parsed.propertyType],
+        page,
+        size: PAGE_SIZE,
+      });
+      return { listings: r.announcements, found: r.total, ok: r.ok, error: r.error };
+    }
+    case "booli": {
+      const r = await fetchBooliPage(db, { location: parsed.location, propertyTypes: [parsed.propertyType], page });
+      return { listings: r.listings, found: r.found, ok: r.ok, error: r.error };
+    }
+    case "finn": {
+      const r = await fetchFinnPage(db, { municipality: parsed.location, propertyTypes: [parsed.propertyType], page });
+      return { listings: r.listings, found: r.found, ok: r.ok, error: r.error };
+    }
+    case "boligsiden": {
+      const r = await fetchBoligsidenPage(db, { municipalities: [parsed.location], addressTypes: [parsed.propertyType], page });
+      return { listings: r.listings, found: r.found, ok: r.ok, error: r.error };
+    }
+    case "visir": {
+      const r = await fetchVisirPage(db, { zip: parsed.location, page });
+      return { listings: r.listings, found: r.found, ok: r.ok, error: r.error };
+    }
   }
-  const r = await fetchEtuoviPage(db, {
-    locations: [parsed.location],
-    propertyTypes: [parsed.propertyType],
-    page: state.next_page,
-    size: PAGE_SIZE,
-  });
-  return { listings: r.announcements, found: r.total, ok: r.ok, error: r.error };
 }
 
 function extractPhotoUrls(raw: string): string[] {
