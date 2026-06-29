@@ -963,16 +963,31 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
             return Ok(());
         }
     };
-    // Drop listings the nationwide pull hasn't seen for a few days — almost always
-    // sold/delisted (the DB never marks status, so staleness is the only signal).
+    // Drop listings the pull hasn't seen for a while — almost always sold/delisted
+    // (the DB never marks status, so staleness is the only signal). The window is
+    // country-aware: Finland is re-pulled reliably every cycle from Oikotie/Etuovi, so
+    // 3 missed days means gone; the other Nordic portals are bot-gated and only polled
+    // once daily from the residential IP, so a transient block (a single empty Booli
+    // response) must NOT wipe a whole country's stock — give them a fortnight's grace.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    const LIVE_WINDOW_SECS: i64 = 3 * 24 * 3600;
+    const FI_WINDOW_SECS: i64 = 3 * 24 * 3600;
+    const NORDIC_WINDOW_SECS: i64 = 14 * 24 * 3600;
     let mut live: Vec<_> = listings
         .into_iter()
-        .filter(|l| now == 0 || now - l.last_seen <= LIVE_WINDOW_SECS)
+        .filter(|l| {
+            if now == 0 {
+                return true;
+            }
+            let window = if l.country_enum() == crate::country::Country::Fi {
+                FI_WINDOW_SECS
+            } else {
+                NORDIC_WINDOW_SECS
+            };
+            now - l.last_seen <= window
+        })
         .collect();
     // Pinned listings must never be dropped by the fetch or the freshness window —
     // otherwise a pin outside the candidate set would be ranked out AND then pruned.

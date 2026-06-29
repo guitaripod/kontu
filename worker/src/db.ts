@@ -643,13 +643,13 @@ export async function upsertListing(db: D1Database, n: NormalizedListing): Promi
   await db
     .prepare(
       "UPDATE listings SET property_id = ?, url = ?, country = ?, property_type = ?, holding_form = ?, kiinteistotunnus = ?, " +
-        "address = ?, municipality = ?, postal_code = ?, district = ?, lat = ?, lon = ?, price_eur = ?, " +
+        "address = ?, municipality = ?, postal_code = ?, district = ?, lat = COALESCE(?, lat), lon = COALESCE(?, lon), price_eur = ?, " +
         "debt_free_price_eur = ?, debt_share_eur = ?, price_per_m2 = ?, maintenance_charge_eur = ?, " +
         "financing_charge_eur = ?, ground_rent_eur_yr = ?, living_area_m2 = ?, total_area_m2 = ?, plot_area_m2 = ?, " +
         "room_count = ?, room_layout = ?, floors = ?, year_built = ?, occupancy_year = ?, " +
-        "roof_year = ?, pipes_renovated_year = ?, water_body = ?, kiinteistovero_eur_yr = ?, electricity_eur_yr = ?, condition_class = ?, " +
+        "roof_year = ?, pipes_renovated_year = ?, water_body = COALESCE(?, water_body), kiinteistovero_eur_yr = ?, electricity_eur_yr = ?, condition_class = ?, " +
         "inspection_status = ?, frame_material = ?, facade_material = ?, roof_material = ?, energy_class = ?, " +
-        "e_value = ?, risk_structures = ?, plot_ownership = ?, lease_end_year = ?, shore = ?, shore_sauna = ?, " +
+        "e_value = ?, risk_structures = ?, plot_ownership = ?, lease_end_year = ?, shore = COALESCE(?, shore), shore_sauna = COALESCE(?, shore_sauna), " +
         "heating_type = ?, heat_distribution = ?, water_supply = ?, sewer_system = ?, broadband = ?, sauna = ?, " +
         "parking = ?, road_access = ?, intended_use = ?, zoning_status = ?, description = ?, status = ?, raw_json = ?, " +
         "content_hash = ?, last_seen = ? WHERE id = ?",
