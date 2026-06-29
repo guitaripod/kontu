@@ -1,10 +1,23 @@
 # kontu — agent playbook
 
-`kontu` is a CLI + TUI to find and decide on a house to buy in Finland. This file is
-written for an AI agent driving the CLI on the user's behalf (e.g. the user opens
-Claude Code, says "find me a lakeside house in Outokumpu under 120k", and you use
-`kontu` to do it). `kontu guide` prints this file; `kontu --help` and
+`kontu` is an agent-native CLI to find and decide on a house to buy across the
+**Nordic region** — Finland (FI), Sweden (SE), Norway (NO), Denmark (DK) and
+Iceland (IS). kontu is the abstraction; each country is one implementation behind
+it (its own cost jurisdiction, risk pathology, listing portal, and data sources).
+This file is written for an AI agent driving the CLI on the user's behalf (e.g. the
+user opens Claude Code, says "find me a lakeside house in Outokumpu under 120k",
+and you use `kontu` to do it). `kontu guide` prints this file; `kontu --help` and
 `kontu <cmd> --help` self-document every flag.
+
+**Country dimension.** Every listing carries a `country` (ISO FI/SE/NO/DK/IS) and
+the cost/risk models dispatch on it — a Swedish house is costed with stämpelskatt +
+capped fastighetsavgift and risk-flagged for `enstegstätad fasad`, a Finnish one
+with varainsiirtovero + kiinteistövero and `valesokkeli`, etc. Filter with
+`--country SE` on `list`, or `kontu spec set --country SE --country NO` (repeatable;
+none = all Nordic). The per-country verified facts live in `docs/expansion/<c>.md`.
+The Worker's daily crawl is still Finland-only by default; SE/NO/DK/IS portal
+adapters (Booli, Finn.no, Boligsiden, fasteignir.visir.is) exist but need a pull
+from a residential IP in-country to verify their drifting params live.
 
 ## Golden rules
 - **Always pass `--json`.** Output is compact, parseable, and stable. The human tables
