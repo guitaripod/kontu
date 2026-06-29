@@ -103,7 +103,8 @@ pub struct Spec {
     pub cash: bool,
     /// Optional EXTRA fit floor on Telegram alerts, layered on top of the quality
     /// gate (0 = the gate alone decides). The gate (the hard criteria in
-    /// `passes_hard` plus the `max_risk` cap) is what makes a home relevant; fit is
+    /// `passes_structural` + `passes_preferences` plus the `max_risk` cap) is what
+    /// makes a home relevant; fit is
     /// relative to the candidate pool, so it only ORDERS survivors and must never
     /// gate membership — "if it doesn't pass the gate, it's irrelevant".
     pub alert_min_fit: f64,

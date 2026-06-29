@@ -944,10 +944,29 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
     // Pinned listings must never be dropped by the fetch or the freshness window —
     // otherwise a pin outside the candidate set would be ranked out AND then pruned.
     ensure_pinned(client, &spec, &mut live).await;
-    let matches: Vec<_> = crate::matching::rank(&spec, live, &defaults)
+    // Bound the off-spec "value outliers" lane: a shore-required spec leaves most of
+    // Finland's cheap inland houses underpriced-but-off-spec, so cap it — otherwise the
+    // lane floods the page and the publish cycle. The lane is about the steepest
+    // discounts vs the local market, so keep the lowest fairness ratios (biggest
+    // steals); unknown ratios sort last. Gate / near-miss / pin are never capped.
+    // Headroom above the ~12 the site shows: the Worker (which owns the geodata bug
+    // signal) drops the bug-ridden and leads with the least buggy, so it needs spare
+    // candidates to choose from — the ranker can't see bug pressure to pre-pick them.
+    const OUTLIER_LIMIT: usize = 20;
+    let ranked: Vec<_> = crate::matching::rank(&spec, live, &defaults)
         .into_iter()
         .filter(|m| m.score >= fit_floor)
         .collect();
+    let (mut outliers, mut matches): (Vec<_>, Vec<_>) =
+        ranked.into_iter().partition(|m| m.value_outlier);
+    outliers.sort_by(|a, b| {
+        a.fairness_ratio
+            .unwrap_or(f64::INFINITY)
+            .partial_cmp(&b.fairness_ratio.unwrap_or(f64::INFINITY))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    outliers.truncate(OUTLIER_LIMIT);
+    matches.extend(outliers);
 
     let mut seen = watch::load_seen()?;
     if a.seed {
@@ -967,6 +986,8 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
             "pin"
         } else if m.near_miss {
             "near_miss"
+        } else if m.value_outlier {
+            "outlier"
         } else {
             "gate"
         };
@@ -1294,7 +1315,7 @@ async fn publish_listing(
     cs.horizon = horizon;
     let proj = cs.project(defaults);
     let gallery = crate::ingest::fetch_gallery(&detail.listing.url).await;
-    let payload = build_publish_payload(&detail, &assessment, &proj, &gallery, horizon, tier);
+    let payload = build_publish_payload(&detail, &assessment, &proj, &gallery, horizon, tier, &m.off_spec);
     client.publish_page(m.id, tier, payload).await?;
 
     if !alert {
@@ -1340,7 +1361,7 @@ fn alert_caption(l: &Listing, m: &crate::matching::Scored) -> String {
     )
 }
 
-fn publish_reasons(l: &Listing, tier: &str) -> Vec<String> {
+fn publish_reasons(l: &Listing, tier: &str, off_spec: &[String]) -> Vec<String> {
     let mut r = Vec::new();
     if let Some(c) = &l.condition_class {
         r.push(format!("Kuntoluokka {c}"));
@@ -1352,11 +1373,16 @@ fn publish_reasons(l: &Listing, tier: &str) -> Vec<String> {
         r.push(format!("Rakennettu {y}"));
     }
     r.push("Käteiskauppa — ei lainaa, ei vastiketta, ei tonttivuokraa".to_string());
-    r.push(if tier == "gate" {
-        "Läpäisi kontun laatuseulan".to_string()
-    } else {
-        "Täyttää kaikki pakolliset kriteerit — vain ostajan riski yli seulan rajan".to_string()
-    });
+    match tier {
+        "gate" => r.push("Läpäisi kontun laatuseulan".to_string()),
+        "outlier" => {
+            r.push("Selvästi alle alueen mediaanihinnan — poikkeuksellinen hinta".to_string());
+            if !off_spec.is_empty() {
+                r.push(format!("Ei täytä kaikkia toiveita: {}", off_spec.join(", ")));
+            }
+        }
+        _ => r.push("Täyttää kaikki pakolliset kriteerit — vain ostajan riski yli seulan rajan".to_string()),
+    }
     r
 }
 
@@ -1367,6 +1393,7 @@ fn build_publish_payload(
     gallery: &[String],
     horizon: u32,
     tier: &str,
+    off_spec: &[String],
 ) -> serde_json::Value {
     let l = &detail.listing;
     let lat = l
@@ -1422,7 +1449,8 @@ fn build_publish_payload(
             "deferred_capex_eur": assessment.deferred_capex_eur,
             "flags": assessment.flags.iter().map(|f| json!({ "label": f.label, "points": f.points, "capex_eur": f.capex_eur })).collect::<Vec<_>>(),
         },
-        "reasons": publish_reasons(l, tier),
+        "reasons": publish_reasons(l, tier, off_spec),
+        "off_spec": off_spec,
         "tier": tier,
         "published_at": "",
     })

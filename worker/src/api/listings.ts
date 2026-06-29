@@ -116,11 +116,12 @@ api.post("/publish", async (c) => {
   if (!body || !Number.isInteger(id) || body.payload == null) {
     return c.json({ error: "bad request: need { id, payload }" }, 400);
   }
-  // The site shows two tiers: gate-passers (validated) and the near-miss / pinned
-  // "almost" set. Both are published; anything else is rejected.
+  // The site shows three tiers: gate-passers (validated), the near-miss / pinned
+  // "almost" set, and off-spec "value outliers" (priced as a steal). All are
+  // published; anything else is rejected.
   const tier = body.tier ?? "";
-  if (tier !== "gate" && tier !== "near_miss" && tier !== "pin") {
-    return c.json({ ok: false, skipped: "unknown tier (expected gate | near_miss | pin)" }, 422);
+  if (tier !== "gate" && tier !== "near_miss" && tier !== "pin" && tier !== "outlier") {
+    return c.json({ ok: false, skipped: "unknown tier (expected gate | near_miss | pin | outlier)" }, 422);
   }
   const prior = await getPublishedPage(c.env.DB, id);
   const payload = await withBugPressure(body.payload, false, prior, c.env.MML_API_KEY);

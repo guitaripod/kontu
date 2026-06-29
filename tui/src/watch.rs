@@ -196,6 +196,9 @@ mod tests {
             risk: 10,
             pinned: false,
             near_miss: false,
+            value_outlier: false,
+            off_spec: vec![],
+            fairness_ratio: None,
             reasons: vec!["lakeshore".into()],
         };
         let out = format_alert(&m);

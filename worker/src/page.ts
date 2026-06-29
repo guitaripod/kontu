@@ -49,7 +49,9 @@ export interface PublishedPayload {
     flags: { label: string; points: number; capex_eur: number }[];
   };
   reasons: string[];
-  tier: "gate" | "near_miss" | "pin";
+  /** Required preferences this off-spec value outlier misses (e.g. "Ei omaa järvenrantaa"). */
+  off_spec?: string[];
+  tier: "gate" | "near_miss" | "pin" | "outlier";
   published_at: string;
   bug_pressure?: {
     mosquito: { score: number; band: string };
@@ -121,7 +123,7 @@ function renderBugPressure(bp: PublishedPayload["bug_pressure"]): string {
   const row = (label: string, ix: { band: string }, tip: string): string =>
     `<div class="bugrow"><span class="buglabel">${label} ${info(tip)}</span><span class="bugband b-${esc(ix.band)}">${esc(ix.band)}</span></div>`;
   return `<section class="card"><h2>Hyttyset &amp; mäkärät ${info(
-    "Pehmeä, suuntaa-antava arvio avoimesta paikkatiedosta — EI vaikuta laatuseulaan eikä karsi kohteita. Hyttyskausi painottuu kesä–heinäkuuhun ja vaihtelee vuosittain sään mukaan.",
+    "Pehmeä, suuntaa-antava arvio avoimesta paikkatiedosta — EI vaikuta laatuseulan validointiin. (Aliarvostettujen löytöjen listalle pääsee vain matalan hyttys- JA mäkäräpaineen kohteita; kohtalainenkin karsii.) Hyttyskausi painottuu kesä–heinäkuuhun ja vaihtelee vuosittain sään mukaan.",
   )}</h2>
   ${row(
     "Hyttyset (seisova vesi)",
@@ -143,6 +145,41 @@ function renderBugPressure(bp: PublishedPayload["bug_pressure"]): string {
     bp.partial ? " Mittaus osittainen — toinen lähde ei juuri nyt vastannut." : ""
   }</p>
   </section>`;
+}
+
+/** matala/kohtalainen/korkea → a short card adjective ("vähän hyttysiä"). */
+function bugWord(band: string): string {
+  return band === "matala" ? "vähän" : band === "korkea" ? "paljon" : "kohtalaisesti";
+}
+
+/** Combined mosquito+blackfly pressure (0 = none). Unknown ≈ moderate so a
+ *  data gap neither flatters nor unduly buries a listing. */
+function bugScoreOf(bp: PublishedPayload["bug_pressure"]): number {
+  return bp ? bp.mosquito.score + bp.blackfly.score : 0.36;
+}
+
+/** For an off-spec "find" the buyer wants essentially NO bugs — even a modest
+ *  (kohtalainen) reading on either axis disqualifies it; only low (matala) hyttys- AND
+ *  mäkäräpaine survives. Unknown pressure is kept (a data gap can't confirm bugs). */
+function tooBuggy(bp: PublishedPayload["bug_pressure"]): boolean {
+  return bp != null && (bp.mosquito.band !== "matala" || bp.blackfly.band !== "matala");
+}
+
+/** Own lake (järvi) shore — mirrors the ranker's `own_lake_shore`: owned shore on a
+ *  water body that isn't a river/pond/sea (unknown body counts as a lake). */
+function hasLakeShore(p: PublishedPayload): boolean {
+  if (p.shore !== "oma_ranta") return false;
+  const w = (p.water_body ?? "").toLowerCase();
+  return !(w.includes("joki") || w.includes("lampi") || w.includes("meri"));
+}
+
+/** Compact mosquito + blackfly chips for a listing card. */
+function bugChips(bp: PublishedPayload["bug_pressure"]): string {
+  if (!bp) return "";
+  return (
+    `<span class="bug b-${esc(bp.mosquito.band)}" title="hyttyset">🦟 ${bugWord(bp.mosquito.band)}</span>` +
+    `<span class="bug b-${esc(bp.blackfly.band)}" title="mäkärät">🪰 ${bugWord(bp.blackfly.band)}</span>`
+  );
 }
 
 /** Critical facts the listing prose buries — surfaced structured-field-first, then
@@ -265,6 +302,15 @@ export function renderIndexPage(
         a.risk.score - b.risk.score ||
         (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9),
     );
+  // These off-spec finds must EARN their place: secluded (gated in the ranker) and
+  // essentially bug-free — drop anything above a low bug reading, then lead with the
+  // least buggy. Applies to every outlier, lake or not: a buggy find is not wanted.
+  const outliers = items
+    .filter((p) => p.tier === "outlier" && !tooBuggy(p.bug_pressure))
+    .sort(
+      (a, b) => bugScoreOf(a.bug_pressure) - bugScoreOf(b.bug_pressure) || (a.price_eur ?? 9e9) - (b.price_eur ?? 9e9),
+    )
+    .slice(0, 12);
   const cardOf = (p: PublishedPayload): string => {
     const cover = p.gallery[0] ?? "";
     const place = p.municipality ?? p.title ?? `#${p.id}`;
@@ -274,7 +320,9 @@ export function renderIndexPage(
       ? ""
       : p.tier === "pin"
         ? `<span class="tag pin">★ Suosikki</span>`
-        : `<span class="tag near">Melkein</span>`;
+        : p.tier === "outlier"
+          ? `<span class="tag outlier">Löytö</span>`
+          : `<span class="tag near">Melkein</span>`;
     const facts = [
       p.living_area_m2 != null ? `${thousands(p.living_area_m2)} m²` : "",
       area(p.plot_area_m2),
@@ -284,17 +332,29 @@ export function renderIndexPage(
       .filter((x) => x && x !== "—")
       .map(esc)
       .join(" · ");
+    // For an off-spec value outlier, lead with what it gives in return for the missing
+    // lake: seclusion (gated in the ranker) + low bug pressure. Caveat trails.
+    const headline = hasLakeShore(p)
+      ? `<span class="bug priv">🌊 Oma ranta</span>`
+      : `<span class="bug priv">🌲 Rauhallinen</span>`;
+    const merits = p.tier === "outlier" ? `<div class="merits">${headline}${bugChips(p.bug_pressure)}</div>` : "";
+    const offspec =
+      p.tier === "outlier" && p.off_spec?.length
+        ? `<div class="offspec">${p.off_spec.map(esc).join(" · ")}</div>`
+        : "";
     return `<a class="tile${isGate ? "" : " almost"}" href="${origin}/kontu/${p.id}">
         <div class="thumb">${cover ? `<img src="${esc(cover)}" loading="${isGate ? "eager" : "lazy"}" decoding="async" alt="" referrerpolicy="no-referrer">` : ""}${tag}</div>
         <div class="meta"><div class="place">${esc(place)}</div>
           <div class="row"><span class="p">${eur(p.price_eur)}</span><span class="m">${thousands(monthly)} €/kk · riski ${p.risk.score}</span></div>
-          <div class="facts2">${facts}</div>
+          ${merits}<div class="facts2">${facts}</div>${offspec}
         </div></a>`;
   };
   const gateCards = gate.map(cardOf).join("");
   const almostCards = almost.map(cardOf).join("");
+  const outlierCards = outliers.map(cardOf).join("");
   const n = gate.length;
   const almostN = almost.length;
+  const outlierN = outliers.length;
   const scanned = market?.scanned ?? n;
   const munis = market?.municipalities ?? 0;
   const unread = market?.unread ?? 0;
@@ -359,6 +419,14 @@ header p{color:var(--mut);margin:.25rem 0 0}
 .tag{position:absolute;top:.6rem;left:.6rem;z-index:2;font-size:.7rem;font-weight:700;padding:.28rem .6rem;border-radius:8px;letter-spacing:.02em;background:rgba(12,15,11,.72);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
 .tag.near{color:#e3b65f}
 .tag.pin{color:#7fd6a3}
+.tag.outlier{color:#e3b341}
+.offspec{margin-top:.35rem;color:var(--mut);font-size:.78rem;line-height:1.4}
+.merits{display:flex;flex-wrap:wrap;gap:.35rem;margin:.5rem 0 .1rem}
+.bug{font-size:.72rem;font-weight:700;padding:.2rem .55rem;border-radius:999px;white-space:nowrap}
+.bug.priv{background:rgba(63,174,111,.16);color:var(--chipg)}
+.b-matala{background:rgba(63,174,111,.16);color:var(--chipg)}
+.b-kohtalainen{background:rgba(216,161,58,.18);color:var(--chipa)}
+.b-korkea{background:rgba(224,90,74,.18);color:var(--chipr)}
 .sechead{margin:2.3rem 0 1rem}
 .almostlede{margin:-.3rem 0 1.2rem;color:var(--mut);font-size:.92rem;line-height:1.55;max-width:64ch}
 .almostlede b{color:var(--ink2)}
@@ -424,6 +492,13 @@ ${
     ? `<h2 class="exh sechead">Melkein läpäisi · ${almostN}</h2>
 <p class="almostlede">Nämä täyttävät <b>kaikki pakolliset kriteerit</b> ja kunto on vahvistettu hyväksi — vain mallinnettu <b>ostajan riski</b> ylittää seulan tiukan ≤25 rajan. Eivät siis validoituja, mutta varteenotettavia.</p>
 <div class="grid">${almostCards}</div>`
+    : ""
+}
+${
+  outlierN
+    ? `<h2 class="exh sechead">Aliarvostetut löydöt · ${outlierN}</h2>
+<p class="almostlede">Nämä <b>eivät täytä kaikkia toiveita</b> (yleensä ei omaa järvenrantaa) — mutta jos rannasta tinkii, vastineeksi vaaditaan muuta: hinta on <b>selvästi alle alueen mediaanin</b>, sijainti on <b>rauhallinen</b> ja <b>hyttys-/mäkäräpaine vähäinen</b> (vain matalan räkän kohteet pääsevät tänne — kohtalainenkin paine karsii). Kunkin kortin kärjessä se mitä saa, alla mistä tinkii.</p>
+<div class="grid">${outlierCards}</div>`
     : ""
 }
 <footer>Koottu kontulla · luvut virallisista ilmoituksista ja paikallisista kustannusmalleista</footer>
@@ -555,10 +630,23 @@ export function renderListingPage(p: PublishedPayload, origin: string): string {
     ? `<p class="cashnote">Käteiskauppa — ei asuntolainaa, ei velkaa, ei pankkia. Ei toistuvia maksuja: ei vastiketta, ei tonttivuokraa.</p>`
     : "";
 
+  const offSpecLine = p.off_spec?.length ? esc(p.off_spec.join(", ")) : "ei kaikkia toiveita";
+  const bugSummary = p.bug_pressure
+    ? ` Hyttyspaine ${esc(p.bug_pressure.mosquito.band)}, mäkäräpaine ${esc(p.bug_pressure.blackfly.band)}.`
+    : "";
   const tierBanner =
     p.tier === "gate"
       ? ""
-      : `<div class="tierbanner ${p.tier === "pin" ? "pin" : "near"}">
+      : p.tier === "outlier"
+        ? `<div class="tierbanner outlier">
+          <span class="tbt">${hasLakeShore(p) ? "Aliarvostettu löytö — oma ranta" : "Aliarvostettu löytö — rauhallinen, vähän bugeja"}</span>
+          <span class="tbd">${
+            hasLakeShore(p)
+              ? `Tässä on <b>oma järvenranta</b> ja hinta on <b>selvästi alle alueen mediaanin</b> — mutta se jää muista toiveista: <b>${offSpecLine}</b>.${bugSummary} Arvioi itse, korvaako hinta ja ranta puuttuvan toiveen.`
+              : `Hinta on <b>selvästi alle alueen mediaanin</b>, sijainti on <b>rauhallinen</b> ja <b>hyttysiä/mäkäriä on vähän</b>.${bugSummary} Tinkimisen paikka: <b>${offSpecLine}</b>. Arvioi itse, korvaako hinta ja rauha puuttuvan järvenrannan.`
+          }</span>
+        </div>`
+        : `<div class="tierbanner ${p.tier === "pin" ? "pin" : "near"}">
           <span class="tbt">${p.tier === "pin" ? "★ Suosikki — melkein läpäisi" : "Melkein läpäisi seulan"}</span>
           <span class="tbd">Täyttää kaikki pakolliset kriteerit ja kunto on vahvistettu hyväksi — vain mallinnettu ostajan riski <b>${p.risk.score}/100</b> ylittää seulan tiukan ≤25 rajan. Ei siis "validoitu", mutta varteenotettava.</span>
         </div>`;
