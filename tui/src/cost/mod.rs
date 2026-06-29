@@ -9,11 +9,15 @@
 
 mod amortization;
 mod defaults;
+mod jurisdiction;
 mod recurring;
+mod state;
 
 pub use amortization::{amortization_schedule, MonthRow, RepaymentType};
 pub use defaults::CostDefaults;
+pub use jurisdiction::{jurisdiction, FeeLine, Jurisdiction};
 pub use recurring::{HeatingType, WaterSupply};
+pub use state::CostState;
 
 use serde::{Deserialize, Serialize};
 
@@ -107,26 +111,31 @@ impl ModelInputs {
     }
 }
 
-/// Itemized one-time costs at t=0.
+/// Itemized one-time costs at t=0. The registration/conveyancing fees are an
+/// itemized list so each country shows its own line items rather than a
+/// Finnish-shaped set of fields.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OneTimeCosts {
     pub down_payment: f64,
     pub transfer_tax: f64,
-    pub lainhuuto: f64,
-    pub kaupanvahvistus: f64,
-    pub kiinnitys: f64,
+    /// Country-specific registration / conveyancing fees (FI lainhuuto +
+    /// kaupanvahvistus + kiinnitys, SE lagfart + pantbrev, …).
+    pub registration_fees: Vec<FeeLine>,
     pub inspection: f64,
     pub arrangement_fee: f64,
     pub moving: f64,
 }
 
 impl OneTimeCosts {
+    /// Sum of all registration / conveyancing line items.
+    pub fn registration_total(&self) -> f64 {
+        self.registration_fees.iter().map(|f| f.amount).sum()
+    }
+
     pub fn total(&self) -> f64 {
         self.down_payment
             + self.transfer_tax
-            + self.lainhuuto
-            + self.kaupanvahvistus
-            + self.kiinnitys
+            + self.registration_total()
             + self.inspection
             + self.arrangement_fee
             + self.moving
@@ -166,29 +175,16 @@ fn rate_path(p: &PurchaseInputs) -> Vec<f64> {
     }
 }
 
-/// Compute the itemized one-time costs at t=0.
+/// Compute the itemized one-time costs at t=0, via the country's jurisdiction.
 pub fn one_time_costs(p: &PurchaseInputs, d: &CostDefaults) -> OneTimeCosts {
     let loan = p.price_eur * p.ltv;
     let down_payment = (p.price_eur - loan).max(0.0);
-    let transfer_rate = match p.holding_form {
-        HoldingForm::Kiinteisto => d.transfer_tax_kiinteisto,
-        HoldingForm::AsuntoOsake => d.transfer_tax_osake,
-    };
-    let is_real_property = matches!(p.holding_form, HoldingForm::Kiinteisto);
+    let is_share = matches!(p.holding_form, HoldingForm::AsuntoOsake);
+    let j = jurisdiction(d.country);
     OneTimeCosts {
         down_payment,
-        transfer_tax: p.debt_free_price_eur * transfer_rate,
-        lainhuuto: if is_real_property { d.lainhuuto_eur } else { 0.0 },
-        kaupanvahvistus: if is_real_property {
-            if p.e_conveyance {
-                d.kaupanvahvistus_econveyance_eur
-            } else {
-                d.kaupanvahvistus_eur
-            }
-        } else {
-            0.0
-        },
-        kiinnitys: d.kiinnitys_eur * p.mortgage_deeds as f64,
+        transfer_tax: j.transfer_tax(d, p.debt_free_price_eur, is_share),
+        registration_fees: j.registration_fees(d, is_share, p.e_conveyance, p.mortgage_deeds),
         inspection: p.inspection_eur,
         arrangement_fee: p.arrangement_fee_eur,
         moving: p.moving_eur,
@@ -218,7 +214,13 @@ pub fn project(
         .land_value_eur
         .unwrap_or(0.2 * purchase.price_eur);
     let kiinteistovero = property.kiinteistovero_eur_yr.unwrap_or_else(|| {
-        defaults.estimated_kiinteistovero(building_taxable, land_taxable, property.is_leisure)
+        jurisdiction(defaults.country).annual_property_tax(
+            defaults,
+            purchase.price_eur,
+            building_taxable,
+            land_taxable,
+            property.is_leisure,
+        )
     });
     let lines =
         recurring::recurring_lines(property, model, defaults, building_value, kiinteistovero);

@@ -5,6 +5,11 @@ fn approx(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol
 }
 
+/// Amount of a registration fee line by key (0 if absent).
+fn fee(ot: &OneTimeCosts, key: &str) -> f64 {
+    ot.registration_fees.iter().find(|f| f.key == key).map(|f| f.amount).unwrap_or(0.0)
+}
+
 fn sample_purchase() -> PurchaseInputs {
     PurchaseInputs {
         price_eur: 200_000.0,
@@ -117,9 +122,9 @@ fn one_time_costs_kiinteisto() {
     let ot = one_time_costs(&p, &d);
     assert!(approx(ot.down_payment, 50_000.0, 1e-6));
     assert!(approx(ot.transfer_tax, 7_500.0, 1e-6));
-    assert!(approx(ot.lainhuuto, 172.0, 1e-6));
-    assert!(approx(ot.kaupanvahvistus, 143.0, 1e-6));
-    assert!(approx(ot.kiinnitys, 47.0, 1e-6));
+    assert!(approx(fee(&ot, "lainhuuto"), 172.0, 1e-6));
+    assert!(approx(fee(&ot, "kaupanvahvistus"), 143.0, 1e-6));
+    assert!(approx(fee(&ot, "kiinnitys"), 47.0, 1e-6));
     let expected = 50_000.0 + 7_500.0 + 172.0 + 143.0 + 47.0 + 1450.0 + 400.0 + 800.0;
     assert!(approx(ot.total(), expected, 1e-6));
 }
@@ -131,8 +136,9 @@ fn osake_lower_transfer_tax_and_no_realproperty_fees() {
     p.holding_form = HoldingForm::AsuntoOsake;
     let ot = one_time_costs(&p, &d);
     assert!(approx(ot.transfer_tax, 3_000.0, 1e-6));
-    assert_eq!(ot.lainhuuto, 0.0);
-    assert_eq!(ot.kaupanvahvistus, 0.0);
+    assert_eq!(fee(&ot, "lainhuuto"), 0.0);
+    assert_eq!(fee(&ot, "kaupanvahvistus"), 0.0);
+    assert!(!ot.registration_fees.iter().any(|f| f.key == "lainhuuto" || f.key == "kaupanvahvistus"));
 }
 
 #[test]
@@ -140,7 +146,7 @@ fn e_conveyance_zeroes_kaupanvahvistus() {
     let d = CostDefaults::default();
     let mut p = sample_purchase();
     p.e_conveyance = true;
-    assert_eq!(one_time_costs(&p, &d).kaupanvahvistus, 0.0);
+    assert_eq!(fee(&one_time_costs(&p, &d), "kaupanvahvistus"), 0.0);
 }
 
 #[test]
