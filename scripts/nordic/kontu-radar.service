@@ -1,0 +1,7 @@
+[Unit]
+Description=kontu — one cross-Nordic detection cycle (ingest SE/NO/IS + Finland pull + match + Telegram + publish)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/Dev/kontu/scripts/radar.sh

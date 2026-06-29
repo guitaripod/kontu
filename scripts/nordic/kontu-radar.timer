@@ -1,0 +1,13 @@
+[Unit]
+Description=kontu cross-Nordic radar schedule
+
+[Timer]
+# Once a day, midday, with up to 45 min of jitter — relaxed and the most human-looking
+# pace for the bot-gated portals (Booli/Finn). Matches are rare and there's no hurry;
+# a once-daily visit catches new listings within a day and looks like a person browsing.
+OnCalendar=*-*-* 12:00:00
+RandomizedDelaySec=2700
+Persistent=true
+
+[Install]
+WantedBy=timers.target
