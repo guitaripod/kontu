@@ -232,8 +232,33 @@ impl Listing {
                     .map(|s| s.contains("oma_ranta") || s.contains("rantaoik"))
                     .unwrap_or(false),
             pipes_renovated_year: self.pipes_renovated_year,
+            pipes_renovation_mentioned: self
+                .description
+                .as_deref()
+                .map(mentions_pipe_renovation)
+                .unwrap_or(false),
         }
     }
+}
+
+/// True when the listing prose states the plumbing was *renewed* — a pipe/sewer term
+/// and a "renovation done" term in the SAME clause, and that clause is not about a
+/// future/needed renewal. Co-location matters: "putkikaide parvekkeella. Keittiö
+/// uusittu" must not read as a pipe renewal, and "viemäri uusittava" (needs renewing)
+/// must not invert into "renewed". Used only to suppress the "original pipes assumed"
+/// penalty when no year could be parsed — it never adds risk.
+fn mentions_pipe_renovation(description: &str) -> bool {
+    let d = description.to_lowercase();
+    let pipe = [
+        "putki", "putke", "vesijoht", "käyttövesi", "kayttovesi", "viemär", "viemar", "linjasaneer", "lvi",
+    ];
+    let reno = ["uusitt", "uusita", "uusim", "uusinta", "uusiks", "remont", "saneera", "uudiste", "asennett", "peruskorjat"];
+    let need = ["uusittav", "tarpeess", "tulee uusi", "on uusittav", "suunnitteil", "edess", "alkuperäi", "alkuperai"];
+    d.split(|c| matches!(c, '.' | ',' | ';' | '\n')).any(|seg| {
+        pipe.iter().any(|k| seg.contains(k))
+            && reno.iter().any(|k| seg.contains(k))
+            && !need.iter().any(|k| seg.contains(k))
+    })
 }
 
 /// Columns the list view can sort by.
@@ -400,6 +425,21 @@ pub struct ListingDetail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pipe_renovation_mention_requires_colocation_and_excludes_future_need() {
+        // Stated, done — suppress the assumption.
+        assert!(mentions_pipe_renovation("Vesiputkien uusiminen vuonna 2012, kylpyhuone 2013."));
+        assert!(mentions_pipe_renovation("Putket uusittu, kunto hyvä."));
+        assert!(mentions_pipe_renovation("Putkiremontti tehty."));
+        // NEEDED / future / original — must NOT read as renewed.
+        assert!(!mentions_pipe_renovation("Viemäröinti uusittava lähivuosina."));
+        assert!(!mentions_pipe_renovation("Putket alkuperäiset, putkiremontti edessä."));
+        // Pipe term and reno verb in different clauses — not a pipe renovation.
+        assert!(!mentions_pipe_renovation("Putkikaide parvekkeella. Keittiö uusittu 2019."));
+        // No plumbing context at all.
+        assert!(!mentions_pipe_renovation("Keittiö ja kylpyhuone remontoitu 2020."));
+    }
 
     #[test]
     fn effective_ppm2_computes_when_missing() {

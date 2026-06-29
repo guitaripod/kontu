@@ -57,6 +57,9 @@ pub struct RiskInput {
     /// Property is within ~100 m of water or on a groundwater area (stricter jätevesi rules).
     pub near_water_or_groundwater: bool,
     pub pipes_renovated_year: Option<i32>,
+    /// The listing prose states the pipes were renewed, but no year could be parsed.
+    /// Suppresses the "original pipes assumed" penalty — evidence, just undated.
+    pub pipes_renovation_mentioned: bool,
 }
 
 /// Result of a risk assessment.
@@ -127,21 +130,52 @@ pub fn assess(input: &RiskInput, current_year: i32) -> RiskAssessment {
         }
     }
 
-    if let Some(a) = age {
-        let pipes_done = input.pipes_renovated_year.is_some();
-        if a > 40 && !pipes_done {
+    // Plumbing: score the EFFECTIVE pipe age — years since the last renewal, or
+    // since the build if never renewed. A known renewal year is a fact, scored at
+    // full weight (and an old known renewal IS flagged, which a mere is_some() check
+    // missed). An unrecorded one is an UNKNOWN: provisioned for cost but scored
+    // lighter and labelled "verify", so the model never sells a guess as a confident
+    // defect. Renewal stated in the prose without a year suppresses the assumption.
+    if let Some(ref_year) = input.pipes_renovated_year.or(input.build_year) {
+        let pipe_age = current_year - ref_year;
+        if input.pipes_renovated_year.is_some() {
+            if pipe_age > 40 {
+                flags.push(RiskFlag {
+                    label: format!("Putkiremontti overdue (pipes {pipe_age} yr since last renewal)"),
+                    points: 18,
+                    capex_eur: 30_000.0,
+                });
+            } else if pipe_age >= 30 {
+                flags.push(RiskFlag {
+                    label: format!("Putkiremontti approaching (pipes {pipe_age} yr since renewal)"),
+                    points: 8,
+                    capex_eur: 15_000.0,
+                });
+            }
+        } else if input.pipes_renovation_mentioned {
+            if pipe_age > 30 {
+                flags.push(RiskFlag {
+                    label: "Pipe renewal noted in listing but year unconfirmed — verify in kuntotarkastus".into(),
+                    points: 3,
+                    capex_eur: 0.0,
+                });
+            }
+        } else if pipe_age > 40 {
             flags.push(RiskFlag {
-                label: "Putkiremontti overdue (>40 yr, no record of renewal)".into(),
-                points: 18,
+                label: "Putkiremontti likely due — original pipes assumed (no renewal on record; verify in kuntotarkastus)".into(),
+                points: 10,
                 capex_eur: 30_000.0,
             });
-        } else if a >= 30 && !pipes_done {
+        } else if pipe_age >= 30 {
             flags.push(RiskFlag {
-                label: "Putkiremontti approaching (pipes 30+ yr)".into(),
-                points: 8,
+                label: "Putkiremontti approaching — pipe age unrecorded (verify in kuntotarkastus)".into(),
+                points: 5,
                 capex_eur: 15_000.0,
             });
         }
+    }
+
+    if let Some(a) = age {
         if a >= 35 || has(&input.risk_structures, "salaoj") {
             flags.push(RiskFlag {
                 label: "Foundation drains (salaojat) likely due".into(),
@@ -296,6 +330,56 @@ mod tests {
         };
         let a = assess(&input, 2026);
         assert!(!a.flags.iter().any(|f| f.label.contains("overdue")));
+    }
+
+    /// A *known* renewal that is itself decades old must still flag overdue — the old
+    /// `is_some()` check let any renovation year, however ancient, clear the flag.
+    #[test]
+    fn old_known_pipe_renewal_still_flags_overdue() {
+        let input = RiskInput {
+            build_year: Some(1965),
+            pipes_renovated_year: Some(1982),
+            inspection_done: true,
+            ..Default::default()
+        };
+        let a = assess(&input, 2026);
+        let pipe = a.flags.iter().find(|f| f.label.contains("Putkiremontti")).expect("pipe flag");
+        assert!(pipe.label.contains("overdue"), "got {:?}", pipe.label);
+        assert_eq!(pipe.points, 18);
+    }
+
+    /// The user's complaint: an UNKNOWN pipe age must not be sold as a confident
+    /// €30k known defect. It's scored lighter than a known-overdue and labelled to
+    /// verify — risk reflects uncertainty, not a fabricated certainty.
+    #[test]
+    fn unrecorded_pipe_age_is_lighter_and_labelled_unknown() {
+        let known_overdue = assess(
+            &RiskInput { build_year: Some(1965), pipes_renovated_year: Some(1982), inspection_done: true, ..Default::default() },
+            2026,
+        );
+        let unknown = assess(
+            &RiskInput { build_year: Some(1970), inspection_done: true, ..Default::default() },
+            2026,
+        );
+        let kp = known_overdue.flags.iter().find(|f| f.label.contains("Putkiremontti")).unwrap();
+        let up = unknown.flags.iter().find(|f| f.label.contains("Putkiremontti")).unwrap();
+        assert!(up.points < kp.points, "unknown ({}) must score below known-overdue ({})", up.points, kp.points);
+        assert!(up.label.contains("verify"), "unknown flag must read as a verify item: {:?}", up.label);
+    }
+
+    /// Renewal stated in the prose (but undated) suppresses the "original pipes"
+    /// assumption — the model has evidence, just not a year.
+    #[test]
+    fn mentioned_pipe_renewal_suppresses_the_assumption() {
+        let input = RiskInput {
+            build_year: Some(1970),
+            pipes_renovation_mentioned: true,
+            inspection_done: true,
+            ..Default::default()
+        };
+        let a = assess(&input, 2026);
+        assert!(!a.flags.iter().any(|f| f.label.contains("original pipes assumed")));
+        assert!(a.flags.iter().all(|f| !f.label.contains("Putkiremontti") || f.capex_eur == 0.0));
     }
 
     #[test]

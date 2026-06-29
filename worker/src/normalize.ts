@@ -531,6 +531,21 @@ function firstYear(raw: unknown): number | null {
 }
 
 /**
+ * Year of an actual roof RENEWAL. A bare year (the "Kattoremontti" row label
+ * already implies renovation) or an explicit re-roofing counts; painting alone
+ * ("katon maalaus 2020") is upkeep, not a renewal, so it must NOT reset the
+ * roof's age clock and mask a roof that is in fact decades old.
+ */
+function roofRenovationYear(raw: unknown): number | null {
+  if (typeof raw !== "string") return null;
+  const year = firstYear(raw);
+  if (year === null) return null;
+  const s = raw.toLowerCase();
+  const paintedOnly = /maala/.test(s) && !/(uusi|vaihd|asenne|peruskorj|remont|pinnoit|huovan|katteen|kate)/.test(s);
+  return paintedOnly ? null : year;
+}
+
+/**
  * Latest year of an actual plumbing/sewer RENOVATION in the renovations text.
  * Only a segment that has a plumbing keyword AND a renovation verb (and is not a
  * build-year statement) qualifies, and the year nearest the plumbing keyword is
@@ -539,12 +554,22 @@ function firstYear(raw: unknown): number | null {
  */
 function pipeRenovationYear(raw: unknown): number | null {
   if (typeof raw !== "string") return null;
-  const PIPE = /(viemär|putki|jätevesi|käyttövesi|vesijohto|lvi[- ]?(saneer|remont|uusi))/iu;
-  const RENO = /(uusit|remontoi|saneerat|uudistet|uusinta|asennett|peruskorjat)/iu;
+  // `putk[ie]` catches the plural nominative "putket" (the most common way pipes are
+  // named), not just "putki".
+  const PIPE = /(viemär|putk[ie]|jätevesi|käyttövesi|vesijohto|lvi[- ]?(saneer|remont|uusi))/iu;
+  // Suffixed "uusi-" forms (uusittu / uusiminen / uusinta / uusiksi) — deliberately
+  // NOT the bare adjective "uusi" (which would read "uusi vesijohtoverkosto" = a NEW
+  // network nearby as a renewal) nor the infinitive "uusia" (a future need). `remont`
+  // also catches the noun "putkiremontti".
+  const RENO = /(uusi(tt|ta|min|mis|nt|ks)|remont|saneerat|uudistet|asennett|peruskorjat)/iu;
   const BUILD = /(rakennusvuosi|rakennettu|valmistunut)/iu;
+  // A renovation that is NEEDED / planned / still original is not one that was DONE —
+  // don't read "putket uusittava", "alkuperäiset putket" or "putkiremontti edessä"
+  // as a completed renewal year.
+  const NEED = /(uusittav|tarpeess|tulee uusi|on uusittav|suunnitteil|edess|alkuperäi)/iu;
   let best: number | null = null;
   for (const seg of raw.split(/[.,;\n]/)) {
-    if (BUILD.test(seg) || !RENO.test(seg)) continue;
+    if (BUILD.test(seg) || NEED.test(seg) || !RENO.test(seg)) continue;
     const pipe = seg.search(PIPE);
     if (pipe < 0) continue;
     let nearest: number | null = null;
@@ -570,6 +595,14 @@ function applyOikotieDetail(row: NormalizedListing, c: Record<string, unknown>):
   const det = (c["details"] ?? null) as Record<string, unknown> | null;
   const full = firstString(c["fullDescription"]);
   if (full && full.length > (row.description?.length ?? 0)) row.description = full;
+  // Facts that live in the prose (not the info-table): extract them even when the
+  // detail page carries no structured table at all. A structured value, when
+  // present, overrides the prose-derived one below.
+  const prosePipeYear = pipeRenovationYear(full);
+  if (prosePipeYear !== null) row.pipes_renovated_year = prosePipeYear;
+  // Only the explicit "oma ranta" literal asserts owned shore; a rantasauna can sit
+  // on a shared shore, so it must not coerce shore ownership.
+  if (/\boma ranta\b/i.test(full ?? "") && !row.shore) row.shore = "oma_ranta";
   if (!det) return;
   const dv = (label: string) => firstString(det[label]);
   const set = <K extends keyof NormalizedListing>(k: K, v: NormalizedListing[K] | null) => {
@@ -592,11 +625,10 @@ function applyOikotieDetail(row: NormalizedListing, c: Record<string, unknown>):
   set("year_built", toInt(dv("Rakennusvuosi")) ?? row.year_built);
   set("kiinteistovero_eur_yr", euroAmount(dv("Kiinteistövero")));
   set("electricity_eur_yr", euroPerYear(dv("Keskimääräinen sähkönkulutus")));
-  set("roof_year", firstYear(dv("Kattoremontti")));
-  set("pipes_renovated_year", pipeRenovationYear(dv("Tehdyt remontit")) ?? pipeRenovationYear(full));
-  // Only the explicit "oma ranta" literal asserts owned shore; a rantasauna can sit
-  // on a shared shore, so it must not coerce shore ownership.
-  if (/\boma ranta\b/i.test(full ?? "") && !row.shore) row.shore = "oma_ranta";
+  set("roof_year", roofRenovationYear(dv("Kattoremontti")));
+  // The structured renovations table, when it carries a pipe-renewal year, wins
+  // over the prose-derived one set above.
+  set("pipes_renovated_year", pipeRenovationYear(dv("Tehdyt remontit")));
 }
 
 const FINNISH_COUNTRY = /^(suomi|finland|finnland)$/i;

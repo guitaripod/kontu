@@ -401,6 +401,53 @@ describe("oikotie detail enrichment", () => {
     expect(nearest.pipes_renovated_year).toBe(2005);
   });
 
+  it("recognises plural 'putket' and the 'putkiremontti tehty' phrasing, but not a NEEDED renewal", () => {
+    const plural = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      details: { "Tehdyt remontit": "Putket uusittu 2005." },
+    });
+    expect(plural.pipes_renovated_year).toBe(2005);
+    const done = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      details: { "Tehdyt remontit": "Putkiremontti tehty 2010." },
+    });
+    expect(done.pipes_renovated_year).toBe(2010);
+    // "viemäröinti uusittava" = sewer NEEDS renewing — must not read as renewed.
+    const needed = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      fullDescription: "Viemäröinti uusittava lähivuosina 2027. Muuten siisti.",
+    });
+    expect(needed.pipes_renovated_year).toBeNull();
+    // pipe term and reno verb in DIFFERENT clauses must not co-trigger.
+    const split = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      fullDescription: "Putkikaide parvekkeella. Keittiö uusittu 2019.",
+    });
+    expect(split.pipes_renovated_year).toBeNull();
+  });
+
+  it("parses the noun form 'uusiminen' from the description prose (real Pello listing)", () => {
+    const n = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      fullDescription:
+        "öljysäiliön muutos maanpäälliseksi sekä vesiputkien uusiminen vuonna 2012, kylpyhuoneremontti vuonna 2013.",
+    });
+    expect(n.pipes_renovated_year).toBe(2012);
+  });
+
+  it("counts a roof renewal but not a roof PAINTING as the roof year", () => {
+    const renewed = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      details: { Kattoremontti: "Vesikatto uusittu 2019" },
+    });
+    expect(renewed.roof_year).toBe(2019);
+    const painted = normalizeOikotieCard({
+      id: "z", buildingData: { buildingType: 4 },
+      details: { Kattoremontti: "Katon maalaus 2020" },
+    });
+    expect(painted.roof_year).toBeNull();
+  });
+
   it("does not coerce shore to oma_ranta just from a rantasauna mention", () => {
     const n = normalizeOikotieCard({
       id: "z", buildingData: { buildingType: 4 },
