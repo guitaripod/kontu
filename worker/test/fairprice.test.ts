@@ -25,12 +25,12 @@ describe("fairnessBand", () => {
 
 describe("computeFairness", () => {
   const medians = new Map<string, number>([
-    ["helsinki", 335000],
-    ["outokumpu", 90000],
+    ["FI|helsinki", 335000],
+    ["FI|outokumpu", 90000],
   ]);
 
   it("joins on a folded municipality name and computes the ratio", () => {
-    const f = computeFairness(medians, "Helsinki", 360000);
+    const f = computeFairness(medians, "FI", "Helsinki", 360000);
     expect(f.benchmark).toBe(335000);
     expect(f.ratio).toBeCloseTo(360000 / 335000, 6);
     expect(f.band).toBe("fair");
@@ -38,14 +38,14 @@ describe("computeFairness", () => {
   });
 
   it("folds diacritics and is case-insensitive", () => {
-    const m = new Map<string, number>([["jarvenpaa", 200000]]);
-    const f = computeFairness(m, "Järvenpää", 230000);
+    const m = new Map<string, number>([["FI|jarvenpaa", 200000]]);
+    const f = computeFairness(m, "FI", "Järvenpää", 230000);
     expect(f.benchmark).toBe(200000);
     expect(f.band).toBe("above_market");
   });
 
   it("returns unknown band/null benchmark when no median exists", () => {
-    const f = computeFairness(medians, "Nokia", 150000);
+    const f = computeFairness(medians, "FI", "Nokia", 150000);
     expect(f.benchmark).toBeNull();
     expect(f.ratio).toBeNull();
     expect(f.band).toBe("unknown");
@@ -53,7 +53,7 @@ describe("computeFairness", () => {
   });
 
   it("returns unknown when price is missing", () => {
-    const f = computeFairness(medians, "Helsinki", null);
+    const f = computeFairness(medians, "FI", "Helsinki", null);
     expect(f.benchmark).toBe(335000);
     expect(f.ratio).toBeNull();
     expect(f.band).toBe("unknown");

@@ -17,6 +17,6 @@
     { "binding": "PHOTOS", "bucket_name": "kontu-photos" }
   ],
   "triggers": {
-    "crons": ["0 4 * * *"]
+    "crons": ["17 5 * * *"]
   }
 }

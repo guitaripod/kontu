@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { api } from "./api/listings";
 import { crawlTick } from "./crawl";
-import { enrichBatch } from "./geo";
+import { enrichBatch, enrichShoreBatch } from "./geo";
 import { marketIsStale, refreshMarketStats } from "./fairprice";
 import { getPhotoSourceByKey, getPublishedPage, listPublishedPages } from "./db";
 import { renderIndexPage, renderListingPage, type PublishedPayload } from "./page";
@@ -168,15 +168,31 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 async function runScheduled(env: Env): Promise<void> {
-  try {
-    await crawlTick(env.DB, env.PHOTOS);
-  } catch (err) {
-    console.warn("scheduled crawl tick failed", String(err));
+  // Drain several crawl pages of the open-API portals (DK Boligsiden, IS visir)
+  // per run, not just one, so they refresh in days rather than weeks. Each tick
+  // is one source/page and stops early when there's nothing queued.
+  // Once a day, so do a generous batch: drain up to 10 crawl pages (open-API DK/IS)
+  // and 25 shore-checks per run. Stops early when nothing is queued.
+  for (let i = 0; i < 10; i++) {
+    try {
+      const r = await crawlTick(env.DB, env.PHOTOS);
+      if (!r.source) break;
+    } catch (err) {
+      console.warn("scheduled crawl tick failed", String(err));
+      break;
+    }
   }
   try {
-    await enrichBatch(env.DB, 5);
+    await enrichBatch(env.DB, 8);
   } catch (err) {
     console.warn("scheduled enrichment failed", String(err));
+  }
+  try {
+    // Country-agnostic geometric shore detection (OSM) — the automated signal that
+    // lets a lakeside match anywhere in the Nordics be detected without a manual pass.
+    await enrichShoreBatch(env.DB, 25);
+  } catch (err) {
+    console.warn("scheduled shore enrichment failed", String(err));
   }
   try {
     if (await marketIsStale(env.DB)) await refreshMarketStats(env.DB);

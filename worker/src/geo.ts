@@ -123,6 +123,67 @@ export async function enrichBatch(db: D1Database, limit: number): Promise<number
   return done;
 }
 
+/**
+ * Automated geometric shore detection for ANY country — the country-agnostic
+ * analogue of Finland's SYKE water layer, via OSM. From a listing's coordinates:
+ * a water body within ~150 m → own/near shore (lake `jarvi`, or sea `meri` near a
+ * coastline), else `ei_rantaa`. Runs a small batch per scheduled tick so every
+ * listing eventually gets a shore signal without a portal-provided field. This is
+ * what lets a Swedish/Norwegian lakeside match be DETECTED automatically. FI keeps
+ * its portal shore (only NULL shores are filled).
+ */
+export async function enrichShoreBatch(db: D1Database, limit: number): Promise<number> {
+  let done = 0;
+  try {
+    const { results } = await db
+      .prepare(
+        "SELECT id, lat, lon FROM listings WHERE shore IS NULL AND lat IS NOT NULL AND lon IS NOT NULL " +
+          "AND status = 'active' ORDER BY last_seen DESC LIMIT ?",
+      )
+      .bind(limit)
+      .all<{ id: number; lat: number; lon: number }>();
+    for (const r of results) {
+      const wb = await shoreFromOsm(r.lat, r.lon);
+      await db
+        .prepare("UPDATE listings SET shore = ?, water_body = ? WHERE id = ?")
+        .bind(wb == null ? "ei_rantaa" : "oma_ranta", wb, r.id)
+        .run();
+      done++;
+    }
+  } catch (err) {
+    console.warn("shore enrichment failed", String(err));
+  }
+  return done;
+}
+
+/** Lake within ~150 m → 'jarvi'; coastline within ~400 m → 'meri'; else null. */
+async function shoreFromOsm(lat: number, lon: number): Promise<string | null> {
+  try {
+    const q =
+      `[out:json][timeout:20];(` +
+      `way["natural"="water"](around:150,${lat},${lon});` +
+      `relation["natural"="water"](around:150,${lat},${lon});` +
+      `way["natural"="coastline"](around:400,${lat},${lon}););out tags 1;`;
+    const res = await fetch(OVERPASS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain", Accept: "application/json" },
+      body: q,
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { elements?: Array<{ tags?: Record<string, string> }> };
+    const els = body.elements ?? [];
+    const coast = els.some((e) => e.tags?.natural === "coastline");
+    const firstWater = els.find((e) => e.tags?.natural === "water");
+    if (firstWater) {
+      const t = firstWater.tags ?? {};
+      return t.water === "bay" || t.water === "lagoon" || coast ? "meri" : "jarvi";
+    }
+    return coast ? "meri" : null;
+  } catch {
+    return null;
+  }
+}
+
 async function geocode(input: GeoInput): Promise<{ lat: number; lon: number } | null> {
   const text = [input.street, input.house_no, input.postal_code, input.municipality]
     .filter((s) => s != null && String(s).trim() !== "")

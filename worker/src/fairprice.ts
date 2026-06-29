@@ -90,8 +90,8 @@ export async function refreshMarketStats(db: D1Database): Promise<number> {
         db
           .prepare(
             "INSERT OR REPLACE INTO market_stats " +
-              "(area_kind, area_code, metric, property_kind, period, value, source, fetched_at) " +
-              "VALUES ('municipality', ?, 'median_total_eur', 'okt_kiinteisto', ?, ?, 'mml', unixepoch())",
+              "(country, area_kind, area_code, metric, property_kind, period, value, source, fetched_at) " +
+              "VALUES ('FI', 'municipality', ?, 'median_total_eur', 'okt_kiinteisto', ?, ?, 'mml', unixepoch())",
           )
           .bind(name, period, median),
       );
@@ -123,17 +123,18 @@ export function fairnessBand(ratio: number | null): string {
   return "overpriced";
 }
 
-/** kunta name (lowercased+folded) → median total price, from cached `market_stats`. */
+/** `country|name` (lowercased+folded municipality) → median total price, from `market_stats`. */
 export async function loadMedians(db: D1Database): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   const { results } = await db
     .prepare(
-      "SELECT area_code, value FROM market_stats m WHERE metric = 'median_total_eur' " +
-        "AND period = (SELECT MAX(period) FROM market_stats WHERE metric = 'median_total_eur' AND area_code = m.area_code)",
+      "SELECT country, area_code, value FROM market_stats m WHERE metric = 'median_total_eur' " +
+        "AND period = (SELECT MAX(period) FROM market_stats WHERE metric = 'median_total_eur' " +
+        "AND country = m.country AND area_code = m.area_code)",
     )
-    .all<{ area_code: string; value: number }>();
+    .all<{ country: string; area_code: string; value: number }>();
   for (const r of results) {
-    if (r.value != null) out.set(r.area_code, r.value);
+    if (r.value != null) out.set(`${r.country}|${r.area_code}`, r.value);
   }
   return out;
 }
@@ -155,14 +156,16 @@ export interface Fairness {
   confidence: "medium" | "unknown";
 }
 
-/** Compute a listing's fairness object from its municipality + asking price. */
+/** Compute a listing's fairness from its country + municipality + asking price. */
 export function computeFairness(
   medians: Map<string, number>,
+  country: string | null,
   municipality: string | null,
   priceEur: number | null,
 ): Fairness {
   const name = asciiFold(municipality);
-  const benchmark = (name !== "" ? medians.get(name) : undefined) ?? null;
+  const key = `${(country ?? "FI").toUpperCase()}|${name}`;
+  const benchmark = (name !== "" ? medians.get(key) : undefined) ?? null;
   const ratio = benchmark && priceEur ? priceEur / benchmark : null;
   return {
     band: fairnessBand(ratio),
