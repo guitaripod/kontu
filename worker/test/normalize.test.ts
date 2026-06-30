@@ -513,3 +513,21 @@ describe("normalizeHeatingType", () => {
     expect(normalizeHeatingType("Sähkölämmitys, ilmavesilämpöpumppuvalmius")).toBe("sahko");
   });
 });
+
+describe("extractRiskStructures country dispatch", () => {
+  it("finds each market's signature pathology in its own language", () => {
+    expect(extractRiskStructures("Putsad fasad, risk för enstegstätad konstruktion.", "SE")).toContain("enstegs");
+    expect(extractRiskStructures("Källarvåning med blåbetong, förhöjd radon.", "SE")).toEqual(
+      expect.arrayContaining(["blabetong", "radon"]),
+    );
+    expect(extractRiskStructures("Facadeplader af MgO (magnesiumoxid).", "DK")).toContain("mgo");
+    expect(extractRiskStructures("Råteskader i bjelkelaget, drenering mangler.", "NO")).toEqual(
+      expect.arrayContaining(["homevaurio", "salaoja"]),
+    );
+    expect(extractRiskStructures("Steinhús með alkalívirkni í steypu.", "IS")).toContain("alkali");
+  });
+  it("a Finnish token is NOT mined from Swedish text (no cross-country bleed)", () => {
+    expect(extractRiskStructures("Putsad fasad.", "SE")).not.toContain("valesokkeli");
+    expect(extractRiskStructures("Valesokkeli ja kosteusvaurio.", "FI")).toContain("valesokkeli");
+  });
+});
