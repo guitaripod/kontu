@@ -40,7 +40,7 @@ import {
   type ListingsFilter,
 } from "../db";
 import { bugPressure } from "../geo";
-import { crawlTick } from "../crawl";
+import { coverUrlsFromRaw, crawlTick } from "../crawl";
 import { enrichBatch, enrichShoreBatch } from "../geo";
 import {
   normalizeOikotieCard,
@@ -179,6 +179,29 @@ api.post("/set-shore", async (c) => {
     if (res.meta.changes > 0) updated++;
   }
   return c.json({ ok: true, updated });
+});
+
+/// Backfill cover photos for listings whose raw_json embeds image URLs but which the
+/// incremental crawl hasn't photo-ingested yet (the cross-Nordic portals ship covers in
+/// their card JSON). Records the source URL under a lazy R2 key — no download. Bounded.
+api.post("/backfill-photos", async (c) => {
+  const limit = Math.min(800, Math.max(1, Number(c.req.query("limit") ?? 300)));
+  const { results } = await c.env.DB.prepare(
+    "SELECT id, raw_json FROM listings l WHERE raw_json IS NOT NULL AND status = 'active' " +
+      "AND (raw_json LIKE '%.jpg%' OR raw_json LIKE '%.jpeg%' OR raw_json LIKE '%.webp%' OR raw_json LIKE '%.png%') " +
+      "AND NOT EXISTS (SELECT 1 FROM listing_photos p WHERE p.listing_id = l.id) LIMIT ?",
+  )
+    .bind(limit)
+    .all<{ id: number; raw_json: string }>();
+  let recorded = 0;
+  for (const r of results) {
+    const urls = coverUrlsFromRaw(r.raw_json);
+    if (urls.length > 0) {
+      await recordCoverPhoto(c.env.DB, r.id, urls);
+      recorded++;
+    }
+  }
+  return c.json({ ok: true, scanned: results.length, recorded });
 });
 
 /// List the listing ids currently on the public site (so the CLI can prune pages

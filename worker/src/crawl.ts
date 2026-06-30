@@ -199,6 +199,25 @@ function extractPhotoUrls(raw: string): string[] {
   return [...urls].slice(0, MAX_PHOTOS_PER_TICK);
 }
 
+/** Image URLs in a listing's raw_json, cover-first (largest pixel dimension first), so
+ *  a portal that embeds many sizes (Boligsiden ships 100x80 thumbnails) leads with the
+ *  biggest. Used to backfill covers for listings the incremental crawl hasn't reached. */
+export function coverUrlsFromRaw(raw: string): string[] {
+  const urls = new Set<string>();
+  try {
+    collectImageUrls(JSON.parse(raw), urls);
+  } catch {
+    /* tolerate malformed raw_json */
+  }
+  const dim = (u: string): number => {
+    const m = u.match(/\/(\d{2,4})x(\d{1,4})\//);
+    return m ? Math.max(Number(m[1]), Number(m[2])) : 0;
+  };
+  // Only the cover (and a couple of spares) are needed for the showcase card; keeping
+  // it small bounds the per-listing D1 writes so a bulk backfill stays within budget.
+  return [...urls].sort((a, b) => dim(b) - dim(a)).slice(0, 3);
+}
+
 function collectImageUrls(node: unknown, out: Set<string>): void {
   if (node == null) return;
   if (typeof node === "string") {

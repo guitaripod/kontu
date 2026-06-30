@@ -44,6 +44,10 @@ def parse_page(html):
         ppm2 = num_from(sqm, "kr") if sqm else None
         url = L.get("url") or ""
         if url.startswith("/"): url = "https://www.booli.se" + url
+        # primaryImage is an Apollo {"__ref":"Image:<id>"}; the Image entry carries no URL,
+        # but Booli's CDN derives one from the id: bcdn.se/images/cache/<id>_<w>x0.webp.
+        img = L.get("primaryImage")
+        img_id = img["__ref"].split(":")[-1] if isinstance(img, dict) and img.get("__ref") else None
         out.append({
             "portal": "booli", "portal_listing_id": str(L.get("booliId") or L.get("id")),
             "url": url, "country": "SE",
@@ -56,6 +60,7 @@ def parse_page(html):
             "plot_area_m2": num_from(pts.split("tomt")[0] if "tomt" in pts else "", "m²"),
             "lat": L.get("latitude"), "lon": L.get("longitude"),
             "raw_json": json.dumps(L, ensure_ascii=False)[:4000],
+            "photo_urls": [f"https://bcdn.se/images/cache/{img_id}_1024x0.webp"] if img_id else [],
         })
     return out, total
 

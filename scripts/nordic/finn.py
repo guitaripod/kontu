@@ -32,6 +32,7 @@ def parse(html):
         ma=re.search(r'(\d+)\s*m²', text)
         mp=re.search(r'(\d[\d  ]{4,})\s*kr', text)
         if not mp: continue
+        mimg=re.search(r'https://images\.finncdn\.no/dynamic/[^"\\ ]+\.(?:jpg|jpeg|png|webp)', block)
         price_nok=int(re.sub(r'[\s ]','',mp.group(1)))
         price_eur=round(price_nok/FX)
         if price_eur>100000 or price_eur<2000: continue
@@ -48,6 +49,7 @@ def parse(html):
             "living_area_m2":int(ma.group(1)) if ma else None,
             "room_count":(int(mb.group(1))+1) if mb else None,
             "raw_json":text[:1500],
+            "photo_urls":[mimg.group(0)] if mimg else [],
         })
     return out
 cheap=[]
