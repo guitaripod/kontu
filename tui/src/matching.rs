@@ -62,6 +62,55 @@ fn has(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|n| text.contains(n))
 }
 
+/// Negation / absence words that flip a positive token: "ei öljylämmitystä", "ilman
+/// sähköä", "ej vinterbonad", "ikke helårs", "valmius maalämmölle" (readiness, not
+/// installed). Checked in a short window BEFORE a matched needle.
+const NEGATORS: &[&str] = &[
+    "ei ", "ilman ", "ingen ", "inga ", "uten ", "utan ", "inte ", "ej ", "ikke ", "ikkje ",
+    "no ", "without ", "valmiu", "mahdollisuus",
+];
+
+/// Like `has`, but ignores a match that a negation word immediately precedes — so
+/// "ei muutettu asuinkäyttöön" / "ej vinterbonad" no longer read as positive proof.
+fn has_unnegated(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| {
+        text.match_indices(needle).any(|(i, _)| {
+            let window: String =
+                text[..i].chars().rev().take(18).collect::<Vec<_>>().into_iter().rev().collect();
+            !NEGATORS.iter().any(|neg| window.contains(neg))
+        })
+    })
+}
+
+/// Explicit, official conversion of a leisure building to permanent residential use —
+/// the strong, structured year-round signal (distinct from a marketing adjective).
+const CONVERSION_TO_YEAR_ROUND: &[&str] = &[
+    "asuinkäyttöön muut", "vakituiseksi muut", "muutettu vakituise", "muutettu asuinkäyt",
+    "ombyggd till åretrunt", "godkänd som åretrunt", "godkänt för åretrunt",
+    "omgjort til helår", "godkjent for helår",
+];
+
+/// A real, installed year-round heating plant in the structured heating field — NOT a
+/// negated or readiness-only mention ("ei öljylämmitystä", "öljylämmitys purettu",
+/// "valmius maalämmölle"), which would otherwise substring-match a heat token.
+fn real_winter_heating(l: &Listing) -> bool {
+    l.heating_type
+        .as_deref()
+        .map(|h| {
+            let h = h.to_lowercase();
+            let has_heat = h.contains("kaukolämp")
+                || h.contains("maalämp")
+                || h.contains("öljy")
+                || h.contains("ivlp")
+                || h.contains("ilmavesi");
+            let negated = ["ei ", "ilman", "valmiu", "puret", "poistet", "mahdollis", "ingen", "uten"]
+                .iter()
+                .any(|n| h.contains(n));
+            has_heat && !negated
+        })
+        .unwrap_or(false)
+}
+
 /// Lowercase + strip Finnish diacritics, mirroring the Worker's `asciiFold` so a
 /// spec `--type mökki` matches a listing stored (folded) as `mokki`.
 fn fold_ascii(s: &str) -> String {
@@ -87,7 +136,10 @@ fn property_family(token: &str) -> &'static str {
     let t = fold_ascii(token);
     // Leisure is checked first: "holiday house" / "fritidshus" must not be caught
     // by the "house" branch.
-    if has(&t, &["mokki", "loma", "vapaa-ajan", "fritid", "leisure", "holiday", "hytte", "sumarhus", "sumarbustad", "cottage"]) {
+    if has(&t, &[
+        "mokki", "loma", "vapaa-ajan", "fritid", "leisure", "holiday", "hytte", "sumarhus",
+        "sumarbustad", "cottage", "sommar", "sommer", "summer",
+    ]) {
         "leisure"
     } else if has(&t, &["omakoti", "erillis", "detached", "einbyli", "enebolig", "villa", "parcelhus", "fritliggende", "house"]) {
         "house"
@@ -317,11 +369,8 @@ fn winter_signal(l: &Listing, desc: &str) -> f64 {
     }
     // An explicit conversion to permanent residential use overrides a historical
     // "built as a summer cabin" mention (origin is not current use) — checked first.
-    if has(desc, &[
-        "asuinkäyttöön muut", "vakituiseksi muut", "muutettu vakituise", "muutettu asuinkäyt",
-        "ombyggd till åretrunt", "godkänd som åretrunt", "godkänt för åretrunt",
-        "omgjort til helår", "godkjent for helår",
-    ]) {
+    // Negation-aware so "ei muutettu asuinkäyttöön" doesn't read as a conversion.
+    if has_unnegated(desc, CONVERSION_TO_YEAR_ROUND) {
         return 1.0;
     }
     // Summer-only or NEGATED winterization next, so "ej vinterbonad" / "ikke helårs"
@@ -360,18 +409,7 @@ fn winter_signal(l: &Listing, desc: &str) -> f64 {
     if has(desc, &["kantovesi", "ei vesijoht", "ei sähkö", "ulkohuussi", "kuivakäymälä"]) {
         return 0.2;
     }
-    let real_heat = l
-        .heating_type
-        .as_deref()
-        .map(|h| {
-            h.contains("kaukolämp")
-                || h.contains("maalämp")
-                || h.contains("öljy")
-                || h.contains("ivlp")
-                || h.contains("ilmavesi")
-        })
-        .unwrap_or(false);
-    if real_heat || has(desc, &["lämmin vesi", "eristett", "talvella"]) {
+    if real_winter_heating(l) || has(desc, &["lämmin vesi", "eristett", "talvella"]) {
         return 0.7;
     }
     0.4
@@ -383,23 +421,7 @@ fn winter_signal(l: &Listing, desc: &str) -> f64 {
 /// lift the winter SCORE but must not, on its own, lift a leisure cabin to the GATE
 /// (the Telegram-alert tier). A detached house is year-round by type and bypasses this.
 fn winter_structurally_confirmed(l: &Listing, desc: &str) -> bool {
-    let real_heat = l
-        .heating_type
-        .as_deref()
-        .map(|h| {
-            h.contains("kaukolämp")
-                || h.contains("maalämp")
-                || h.contains("öljy")
-                || h.contains("ivlp")
-                || h.contains("ilmavesi")
-        })
-        .unwrap_or(false);
-    real_heat
-        || has(desc, &[
-            "asuinkäyttöön muut", "vakituiseksi muut", "muutettu vakituise", "muutettu asuinkäyt",
-            "ombyggd till åretrunt", "godkänd som åretrunt", "godkänt för åretrunt",
-            "omgjort til helår", "godkjent for helår",
-        ])
+    real_winter_heating(l) || has_unnegated(desc, CONVERSION_TO_YEAR_ROUND)
 }
 
 /// Structural condition: 1.0 = move-in/renovated, ~0.2 = needs major work.
@@ -449,6 +471,13 @@ fn condition_signal(l: &Listing, desc: &str) -> f64 {
     }
     if cc.contains("huono") || cc.contains("valttav") {
         base = base.min(0.35);
+    }
+    // Explicit needs-RENEWAL language disqualifies "confirmed-good": one renovated room
+    // ("keittiö remontoitu") can't certify a house whose bathroom is "alkuperäinen ja
+    // kaipaa uusimista". Cap below the 0.8 gate but above the 0.5 floor — it stays a
+    // candidate, it just can't fire the perfect-match alert.
+    if has(desc, &["kaipaa uusimis", "uusimisen tarp", "uusittava", "uusimista vaill", "kaipaa peruskorj"]) {
+        base = base.min(0.6);
     }
     base
 }
@@ -1440,6 +1469,68 @@ mod tests {
     }
 
     #[test]
+    fn summer_villa_classifies_as_leisure_not_house() {
+        // "sommervilla"/"sommerbolig" contain the house token "villa" but are summer
+        // properties — they must classify as leisure so they don't bypass the cabin
+        // winter gate via the is_house shortcut.
+        assert_eq!(property_family("sommervilla"), "leisure");
+        assert_eq!(property_family("Sommerbolig"), "leisure");
+        assert_eq!(property_family("villa sommerbolig"), "leisure");
+        let defaults = CostDefaults::default();
+        let l = Listing {
+            id: 1, country: Some("NO".into()), property_type: Some("sommervilla".into()),
+            shore: Some("oma_ranta".into()), price_eur: Some(90_000), living_area_m2: Some(80.0),
+            condition_class: Some("hyvä".into()), year_built: Some(2015),
+            description: Some("Flott eiendom ved vannet, egen strandlinje. Velkommen.".into()),
+            ..Default::default()
+        };
+        let scored = rank(&gate_spec(), vec![l], &defaults);
+        assert!(!scored.is_empty());
+        assert_ne!(tier_of(&scored[0]), "gate", "a summer villa must not gate without winter proof");
+    }
+
+    #[test]
+    fn negated_winter_evidence_is_not_confirmation() {
+        // A leisure cabin whose heating field NEGATES real heat ("ei öljylämmitystä") or
+        // whose prose NEGATES conversion ("ei muutettu asuinkäyttöön") is not confirmed.
+        let cabin = |heat: &str, d: &str| Listing {
+            id: 1, country: Some("FI".into()), property_type: Some("mökki".into()),
+            shore: Some("oma_ranta".into()), price_eur: Some(80_000), living_area_m2: Some(70.0),
+            condition_class: Some("hyvä".into()), year_built: Some(2014),
+            heating_type: Some(heat.into()), description: Some(d.into()),
+            ..Default::default()
+        };
+        assert!(!real_winter_heating(&cabin("ei öljylämmitystä", "x")), "negated heat field");
+        assert!(!real_winter_heating(&cabin("valmius maalämmölle", "x")), "readiness is not installed heat");
+        assert!(!has_unnegated("vapaa-ajan asunto, ei muutettu asuinkäyttöön.",
+            &["muutettu asuinkäyt"]), "negated conversion phrase");
+        let defaults = CostDefaults::default();
+        let l = cabin("ei öljylämmitystä", "Mökki järven rannalla. Ei öljylämmitystä. Tervetuloa.");
+        let scored = rank(&gate_spec(), vec![l], &defaults);
+        assert!(!scored.is_empty());
+        assert_ne!(tier_of(&scored[0]), "gate", "negated heat must not confirm a cabin gate");
+    }
+
+    #[test]
+    fn partial_renovation_with_needs_work_does_not_gate() {
+        // One renovated room must not certify a house whose other part is explicitly
+        // original and needs renewal.
+        let defaults = CostDefaults::default();
+        let l = Listing {
+            id: 1, country: Some("FI".into()), property_type: Some("omakotitalo".into()),
+            shore: Some("oma_ranta".into()), price_eur: Some(95_000), living_area_m2: Some(105.0),
+            condition_class: None, year_built: Some(1991), heating_type: Some("maalämpö".into()),
+            description: Some(
+                "Omakotitalo järven rannalla, talviasuttava. Keittiö remontoitu 2014, kylpyhuone alkuperäinen ja kaipaa uusimista.".into(),
+            ),
+            ..Default::default()
+        };
+        let scored = rank(&gate_spec(), vec![l], &defaults);
+        assert!(!scored.is_empty(), "still surfaces as a candidate");
+        assert_ne!(tier_of(&scored[0]), "gate", "needs-renewal language blocks the confirmed-good gate");
+    }
+
+    #[test]
     fn summer_only_reads_across_languages() {
         let w = |c: &str, d: &str| {
             let l = Listing { country: Some(c.into()), property_type: Some("leisure".into()), description: Some(d.into()), ..Default::default() };
@@ -1449,4 +1540,10 @@ mod tests {
         assert!(w("NO", "Sommerhytte, ikke helårs.") < 0.3, "NO sommerhytte reads summer-only");
         assert!(w("SE", "Vinterbonad stuga för åretruntboende.") >= 0.9, "SE vinterbonad reads year-round");
     }
+
+
+
+
+
+
 }
