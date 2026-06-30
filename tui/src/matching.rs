@@ -506,6 +506,18 @@ fn condition_signal(l: &Listing, desc: &str) -> f64 {
     ]) {
         base = base.min(0.55);
     }
+    // Damp / mould / rot disclosure (FI + the SE/NO candidate markets), negation-aware so
+    // "ei kosteutta" / "inga fuktproblem" / "ingen råte" stay positive. A confirmed-good
+    // gate must not fire on a house that admits moisture in the basement or attic.
+    if has_unnegated(desc, &[
+        "kosteutta havait", "havaittu kosteutta", "kosteusongelm", "kosteusjälki", "kosteusjalk",
+        "kostea kellari", "kellari on koste", "kellari ajoittain koste", "kosteutta kellar",
+        "home haju", "homeen haju", "homett", "homehtu", "mikrobivaur", "mikrobikasvu", "lahovika", "lahonnut",
+        "fuktproblem", "fuktskad", "fukt i kallar", "fuktig kallar", "mögel", "möglig", "rötskad",
+        "röta i", "vannskad", "råteskad", "råte i", "muggsopp", "soppskad", "fuktig kjeller",
+    ]) {
+        base = base.min(0.55);
+    }
     base
 }
 
@@ -1579,6 +1591,32 @@ mod tests {
             assert!(!scored.is_empty(), "still a candidate: {d}");
             assert_ne!(tier_of(&scored[0]), "gate", "disclosed defect must block the gate: {d}");
         }
+    }
+
+    #[test]
+    fn disclosed_moisture_and_rot_block_the_gate_across_languages() {
+        let defaults = CostDefaults::default();
+        let mk = |c: &str, pt: &str, d: &str| Listing {
+            id: 1, country: Some(c.into()), property_type: Some(pt.into()),
+            shore: Some("oma_ranta".into()), price_eur: Some(110_000), living_area_m2: Some(105.0),
+            condition_class: Some("hyvä".into()), year_built: Some(2001), heating_type: Some("maalämpö".into()),
+            description: Some(d.into()),
+            ..Default::default()
+        };
+        let cases = [
+            ("FI", "omakotitalo", "Hyväkuntoinen koti rannalla. Kellarissa on havaittu kosteutta."),
+            ("FI", "omakotitalo", "Siisti omakotitalo omalla rannalla. Yläpohjassa home hajua."),
+            ("SE", "villa", "Välskött villa vid sjön, egen strand. Det finns fuktproblem i källaren."),
+            ("NO", "enebolig", "Velholdt enebolig ved vannet. Råteskader i bjelkelaget må utbedres."),
+        ];
+        for (c, pt, d) in cases {
+            let scored = rank(&gate_spec(), vec![mk(c, pt, d)], &defaults);
+            assert!(!scored.is_empty(), "still a candidate: {d}");
+            assert_ne!(tier_of(&scored[0]), "gate", "disclosed damp/rot must block the gate: {d}");
+        }
+        // Negation stays positive — "ei kosteutta" must not trip the moisture cap.
+        let clean = mk("FI", "omakotitalo", "Erinomaisessa kunnossa, ei kosteutta tai vaurioita. Talviasuttava, oma järvenranta.");
+        assert_eq!(tier_of(&rank(&gate_spec(), vec![clean], &defaults)[0]), "gate", "a clean home still gates");
     }
 
     #[test]
