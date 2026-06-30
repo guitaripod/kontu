@@ -36,18 +36,35 @@ def api_post(path, payload):
     ).stdout.strip()
 
 
+FX_ISK = 144.0  # ISK per EUR
+IS_PROPERTY_TAX_RATE = 0.004  # fasteignaskattur residential A-rate (matches the IS jurisdiction)
+
+
 def detail(url):
     raw = subprocess.run(
         ["curl", "-sL", "-m", "25", "-H", f"User-Agent: {UA}", "-H", "Accept-Language: is", url],
         capture_output=True, timeout=35,
     ).stdout.decode("utf-8", "replace")
+    text = re.sub(r"<[^>]+>", " ", raw)
     out = {}
-    my = re.search(r"Byggt\s+((?:18|19|20)\d{2})", re.sub(r"<[^>]+>", " ", raw))
+    my = re.search(r"Byggt\s+((?:18|19|20)\d{2})", text)
     if my:
         out["year_built"] = int(my.group(1))
     mc = re.search(r"lat=(-?\d+\.\d+)&lon=(-?\d+\.\d+)", raw)
     if mc:
         out["lat"], out["lon"] = float(mc.group(1)), float(mc.group(2))
+    # Real fasteignamat (assessed value, ISK) → the actual annual fasteignaskattur, so the
+    # IS cost uses the legal tax base instead of the 0.85×price proxy (assessed often
+    # diverges sharply from asking on cheap rural property). The cost model prefers an
+    # explicit kiinteistovero_eur_yr over its jurisdiction estimate.
+    mf = re.search(r"Fasteignamat\s*</div>\s*<h4[^>]*>\s*([\d.]+)\s*kr", raw)
+    if mf:
+        try:
+            isk = int(mf.group(1).replace(".", ""))
+            if isk > 1_000_000:
+                out["kiinteistovero_eur_yr"] = round(IS_PROPERTY_TAX_RATE * isk / FX_ISK)
+        except ValueError:
+            pass
     return out
 
 
@@ -69,7 +86,7 @@ print(f"IS dwellings needing build year: {len(pending)}", flush=True)
 batch, ok, miss = [], 0, 0
 for l in pending:
     d = detail(l["url"])
-    if d.get("year_built") is not None or d.get("lat") is not None:
+    if d:
         batch.append({"id": l["id"], **d})
         ok += 1
     else:

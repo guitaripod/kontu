@@ -227,6 +227,7 @@ api.post("/enrich-listing", async (c) => {
         lon?: number;
         plot_ownership?: string;
         holding_form?: string;
+        kiinteistovero_eur_yr?: number;
       }>;
     }>()
     .catch(() => null);
@@ -237,7 +238,7 @@ api.post("/enrich-listing", async (c) => {
     const res = await c.env.DB.prepare(
       "UPDATE listings SET year_built = COALESCE(year_built, ?), lat = COALESCE(lat, ?), " +
         "lon = COALESCE(lon, ?), plot_ownership = COALESCE(plot_ownership, ?), " +
-        "holding_form = COALESCE(holding_form, ?) WHERE id = ?",
+        "holding_form = COALESCE(holding_form, ?), kiinteistovero_eur_yr = COALESCE(kiinteistovero_eur_yr, ?) WHERE id = ?",
     )
       .bind(
         Number.isInteger(u.year_built) ? u.year_built : null,
@@ -245,6 +246,7 @@ api.post("/enrich-listing", async (c) => {
         typeof u.lon === "number" ? u.lon : null,
         typeof u.plot_ownership === "string" ? u.plot_ownership : null,
         typeof u.holding_form === "string" ? u.holding_form : null,
+        typeof u.kiinteistovero_eur_yr === "number" ? u.kiinteistovero_eur_yr : null,
         u.id,
       )
       .run();
