@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { api } from "./api/listings";
 import { crawlTick } from "./crawl";
 import { enrichBatch, enrichShoreBatch } from "./geo";
-import { marketIsStale, refreshMarketStats } from "./fairprice";
+import { marketIsStale, refreshMarketStats, refreshNordicMarketStats } from "./fairprice";
 import { getPhotoSourceByKey, getPublishedPage, listPublishedPages } from "./db";
 import { renderIndexPage, renderListingPage, type PublishedPayload } from "./page";
 
@@ -202,5 +202,10 @@ async function runScheduled(env: Env): Promise<void> {
     if (await marketIsStale(env.DB)) await refreshMarketStats(env.DB);
   } catch (err) {
     console.warn("scheduled market refresh failed", String(err));
+  }
+  try {
+    await refreshNordicMarketStats(env.DB);
+  } catch (err) {
+    console.warn("scheduled nordic market refresh failed", String(err));
   }
 }

@@ -51,7 +51,7 @@ import {
   isForeignListing,
   coerceNormalized,
 } from "../normalize";
-import { computeFairness, loadMedians, marketIsStale, refreshMarketStats } from "../fairprice";
+import { computeFairness, loadMedians, loadPpm2Medians, marketIsStale, refreshMarketStats, refreshNordicMarketStats } from "../fairprice";
 
 export const api = new Hono<{ Bindings: Env }>();
 
@@ -61,12 +61,13 @@ api.get("/listings", async (c) => {
   const filter = parseListingsFilter(c.req.query.bind(c.req), c.req.queries.bind(c.req));
   const { listings, total } = await queryListings(c.env.DB, filter);
   const medians = await loadMedians(c.env.DB);
+  const ppm2Medians = await loadPpm2Medians(c.env.DB);
   const enriched = listings.map((l) => ({
     ...l,
     risk_structures: parseJsonArray(l.risk_structures),
     days_on_market: daysOnMarket(l.first_seen),
     price_per_m2: l.price_per_m2 ?? derivePpm2(l.price_eur, l.living_area_m2),
-    fairness: computeFairness(medians, l.country, l.municipality, l.price_eur),
+    fairness: computeFairness(medians, l.country, l.municipality, l.price_eur, ppm2Medians, l.living_area_m2),
   }));
   return c.json({ listings: enriched, total });
 });
@@ -87,6 +88,7 @@ api.get("/listings/:id", async (c) => {
   ]);
   const dossier = listing.property_id != null ? await getDossier(c.env.DB, listing.property_id) : null;
   const medians = await loadMedians(c.env.DB);
+  const ppm2Medians = await loadPpm2Medians(c.env.DB);
 
   return c.json({
     listing: {
@@ -94,7 +96,7 @@ api.get("/listings/:id", async (c) => {
       risk_structures: parseJsonArray(listing.risk_structures),
       days_on_market: daysOnMarket(listing.first_seen),
       price_per_m2: listing.price_per_m2 ?? derivePpm2(listing.price_eur, listing.living_area_m2),
-      fairness: computeFairness(medians, listing.country, listing.municipality, listing.price_eur),
+      fairness: computeFairness(medians, listing.country, listing.municipality, listing.price_eur, ppm2Medians, listing.living_area_m2),
     },
     events,
     photos,
@@ -202,6 +204,14 @@ api.post("/backfill-photos", async (c) => {
     }
   }
   return c.json({ ok: true, scanned: results.length, recorded });
+});
+
+/// Recompute the non-FI self-benchmark (median asking price per country+municipality)
+/// from current listings on demand, so the cross-Nordic value lane has an area signal
+/// without waiting for the daily cron. Token-guarded.
+api.post("/refresh-nordic-stats", async (c) => {
+  const written = await refreshNordicMarketStats(c.env.DB);
+  return c.json({ ok: true, benchmarks: written });
 });
 
 /// List the listing ids currently on the public site (so the CLI can prune pages
