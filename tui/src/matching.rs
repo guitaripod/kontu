@@ -96,14 +96,19 @@ const CONVERSION_TO_YEAR_ROUND: &[&str] = &[
 fn real_winter_heating(l: &Listing) -> bool {
     l.heating_type
         .as_deref()
-        .map(|h| {
-            let h = h.to_lowercase();
-            let has_heat = h.contains("kaukolämp")
-                || h.contains("maalämp")
-                || h.contains("öljy")
+        .map(|raw| {
+            // The Worker stores an ASCII-folded heating string ("maalampo", "oljy"), so
+            // match folded stems — diacritic tokens would never hit the real data.
+            let h = fold_ascii(raw);
+            let has_heat = h.contains("kaukolamp")
+                || h.contains("maalamp")
+                || h.contains("oljy")
                 || h.contains("ivlp")
                 || h.contains("ilmavesi");
-            let negated = ["ei ", "ilman", "valmiu", "puret", "poistet", "mahdollis", "ingen", "uten"]
+            // Readiness ("valmius"/"varaus"), removal ("purettu"/"poistettu") or negation
+            // is not an installed plant. (If the Worker collapsed it to a bare token, the
+            // description carries the qualifier — checked at the call site.)
+            let negated = ["ei ", "ilman", "valmiu", "varaus", "puret", "poistet", "mahdollis", "ingen", "uten"]
                 .iter()
                 .any(|n| h.contains(n));
             has_heat && !negated
@@ -141,6 +146,10 @@ fn property_family(token: &str) -> &'static str {
         "sumarbustad", "cottage", "sommar", "sommer", "summer",
     ]) {
         "leisure"
+    } else if has(&t, &["tomt", "tontti", "byggetomt", "byggegrund", "byggegrunn"]) {
+        // A building-PLOT type ("villatomt", "omakotitalotontti") is land, not a home —
+        // caught before the house branch so the "villa"/"talo" substring can't claim it.
+        "plot"
     } else if has(&t, &["omakoti", "erillis", "detached", "einbyli", "enebolig", "villa", "parcelhus", "fritliggende", "house"]) {
         "house"
     } else if has(&t, &["pari", "tomanns", "parhus", "kedjehus", "dobbelthus", "semi"]) {
@@ -326,20 +335,26 @@ fn is_leased_plot(l: &Listing, desc: &str) -> bool {
 /// cabin (SE kolonistuga / koloniförening), a touring caravan, or a tiny shed on
 /// a leisure plot. These ultra-cheap "fritidshus" are the dominant false positive.
 fn is_not_a_dwelling(l: &Listing, desc: &str) -> bool {
+    let pt = fold_ascii(l.property_type.as_deref().unwrap_or(""));
     if has(
         desc,
         &[
             "kolonistug", "koloniföre", "kolonifore", "kolonihave", "kolonilott", "koloniträd",
             "kolonitrad", "husvagn", "campingvogn", "campingvagn", "husbil", "spiktält", "spiktalt",
         ],
-    ) {
+    ) || has(&pt, &["vagn", "villavagn", "campingvogn", "husbil"])
+    {
         return true;
     }
-    // A leisure-classed listing with a trivial dwelling footprint is a shed / sauna /
-    // plot, not a year-round home. 20 m² clears the shed-and-studio band while leaving
-    // genuine small cottages (which start around 25 m²) intact.
-    matches!(property_family(l.property_type.as_deref().unwrap_or("")), "leisure" | "plot")
-        && l.living_area_m2.map(|a| a < 20.0).unwrap_or(false)
+    // A trivial dwelling footprint is a shed / sauna / studio / plot, not a year-round
+    // home — regardless of how the type is tagged (a 20 m² "villa" is shed-sized). The
+    // floor applies to every house-shaped family; apartments (where 20 m² studios are
+    // ordinary) are excluded by the spec's property_type filter, not here. 20 m² clears
+    // the shed-and-studio band while leaving genuine small cottages (~25 m²+) intact.
+    matches!(
+        property_family(&pt),
+        "leisure" | "plot" | "house" | "semi" | "terraced"
+    ) && l.living_area_m2.map(|a| a < 20.0).unwrap_or(false)
 }
 
 /// Clearly more than one living floor — for the single-storey hard filter.
@@ -472,12 +487,24 @@ fn condition_signal(l: &Listing, desc: &str) -> f64 {
     if cc.contains("huono") || cc.contains("valttav") {
         base = base.min(0.35);
     }
-    // Explicit needs-RENEWAL language disqualifies "confirmed-good": one renovated room
-    // ("keittiö remontoitu") can't certify a house whose bathroom is "alkuperäinen ja
-    // kaipaa uusimista". Cap below the 0.8 gate but above the 0.5 floor — it stays a
-    // candidate, it just can't fire the perfect-match alert.
-    if has(desc, &["kaipaa uusimis", "uusimisen tarp", "uusittava", "uusimista vaill", "kaipaa peruskorj"]) {
-        base = base.min(0.6);
+    // DISCLOSED defects dominate any positive adjective or kuntoluokka — a confirmed-good
+    // GATE must never fire on a house whose own copy admits a leaking roof, missing
+    // drainage, moisture damage or an imminent pipe renovation, however cheerfully it
+    // opens ("hyväkuntoinen ja viihtyisä, mutta katto vuotaa"). This is the negative
+    // override the Finnish listing register demands; it caps below the 0.8 gate (the home
+    // still surfaces as a candidate with a verify-condition caveat). Applied AFTER the
+    // kuntoluokka floor so the defect wins. Ambiguous works (putkiremontti, kattoremontti)
+    // carry the upcoming/needed qualifier so a COMPLETED renovation still reads positive.
+    if has(desc, &[
+        "katto vuota", "vesikatto vuota", "vesivaur", "lahovaur", "asbesti", "perustusvaur",
+        "routavaur", "salaojat puuttu", "salaojitus puuttu", "ei salaoj", "salaojat uusitt",
+        "kaipaa uusimis", "uusimisen tarp", "uusittava", "uusimista vaill", "kaipaa peruskorj",
+        "kaipaa remont", "kunnostuksen tarp",
+        "putkiremontti edess", "putkiremontti tuloss", "putkiremontin tarp", "linjasaneeraus edess",
+        "linjasaneeraus tuloss", "kattoremontti edess", "kattoremontti tuloss", "vesikatto uusitt",
+        "vesikatto tulee uusi", "katon uusiminen edess", "sähköt uusitt", "sähköistys uusitt",
+    ]) {
+        base = base.min(0.55);
     }
     base
 }
@@ -1528,6 +1555,48 @@ mod tests {
         let scored = rank(&gate_spec(), vec![l], &defaults);
         assert!(!scored.is_empty(), "still surfaces as a candidate");
         assert_ne!(tier_of(&scored[0]), "gate", "needs-renewal language blocks the confirmed-good gate");
+    }
+
+    #[test]
+    fn disclosed_defects_dominate_a_positive_adjective() {
+        // The common Finnish register: a cheerful opener + an honest defect disclosure.
+        // The defect must dominate — no confirmed-good gate for a leaking roof / missing
+        // drainage / imminent pipe renovation, however good the kuntoluokka.
+        let defaults = CostDefaults::default();
+        let mk = |d: &str| Listing {
+            id: 1, country: Some("FI".into()), property_type: Some("omakotitalo".into()),
+            shore: Some("oma_ranta".into()), price_eur: Some(110_000), living_area_m2: Some(112.0),
+            condition_class: Some("hyvä".into()), year_built: Some(1998), heating_type: Some("maalämpö".into()),
+            description: Some(d.into()),
+            ..Default::default()
+        };
+        for d in [
+            "Hyväkuntoinen ja viihtyisä omakotitalo järven rannalla. Katto vuotaa, vesikatto uusittava lähivuosina.",
+            "Siisti talo omalla rannalla, hyväkuntoinen. Salaojat puuttuvat. Tervetuloa.",
+            "Hyvin pidetty koti rannalla. Taloyhtiössä putkiremontti edessä 2027.",
+        ] {
+            let scored = rank(&gate_spec(), vec![mk(d)], &defaults);
+            assert!(!scored.is_empty(), "still a candidate: {d}");
+            assert_ne!(tier_of(&scored[0]), "gate", "disclosed defect must block the gate: {d}");
+        }
+    }
+
+    #[test]
+    fn tiny_or_plot_typed_listings_are_not_year_round_homes() {
+        // A 20 m² "villa" is shed-sized; a "villatomt" is land; a "villavagn" is a caravan
+        // — none may gate, even tagged with a house token and a good kuntoluokka.
+        assert_eq!(property_family("villatomt"), "plot");
+        assert_eq!(property_family("omakotitalotontti"), "plot");
+        let defaults = CostDefaults::default();
+        let shed = Listing {
+            id: 1, country: Some("SE".into()), property_type: Some("villa".into()),
+            shore: Some("oma_ranta".into()), price_eur: Some(55_000), living_area_m2: Some(18.0),
+            condition_class: Some("hyvä".into()), year_built: Some(2019),
+            description: Some("Liten villa vid sjön med egen strand, nyskick. Välkommen!".into()),
+            ..Default::default()
+        };
+        let scored = rank(&gate_spec(), vec![shed], &defaults);
+        assert!(scored.iter().all(|s| tier_of(s) != "gate"), "an 18 m² villa must not gate");
     }
 
     #[test]

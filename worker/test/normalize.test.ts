@@ -7,6 +7,7 @@ import {
   fingerprint,
   isForeignListing,
   normalizeEtuoviAnnouncement,
+  normalizeHeatingType,
   normalizeOikotieCard,
   normalizePropertyType,
   oikotiePhotoUrls,
@@ -490,5 +491,25 @@ describe("contentHash", () => {
   it("produces an 8-char hex string", () => {
     const n = normalizeOikotieCard({ id: 1, price: "100000" });
     expect(contentHash(n)).toMatch(/^[0-9a-f]{8}$/);
+  });
+});
+
+describe("normalizeHeatingType", () => {
+  it("classifies installed plants (folded)", () => {
+    expect(normalizeHeatingType("Maalämpö")).toBe("maalampo");
+    expect(normalizeHeatingType("Kaukolämpö")).toBe("kaukolampo");
+    expect(normalizeHeatingType("Ilmavesilämpöpumppu")).toBe("ivlp");
+    expect(normalizeHeatingType("Öljylämmitys")).toBe("oljy");
+  });
+
+  it("does NOT record readiness / removed heat as installed", () => {
+    // A mere heat-pump conduit must not become "ivlp" — a summer cabin would read year-round.
+    expect(normalizeHeatingType("Ilmavesilämpöpumppuvalmius asennettu")).not.toBe("ivlp");
+    expect(normalizeHeatingType("Maalämpövaraus")).not.toBe("maalampo");
+    expect(normalizeHeatingType("Öljylämmitys purettu")).not.toBe("oljy");
+  });
+
+  it("keeps a real primary heat alongside a readiness mention", () => {
+    expect(normalizeHeatingType("Sähkölämmitys, ilmavesilämpöpumppuvalmius")).toBe("sahko");
   });
 });

@@ -233,7 +233,18 @@ export function normalizeHoldingForm(raw: unknown): string | null {
 }
 
 export function normalizeHeatingType(raw: unknown): string | null {
-  const s = asciiFold(raw);
+  let s = asciiFold(raw);
+  if (s === "") return null;
+  // "Ready-for" / "reserved" / removed heat is NOT an installed plant — strip the heat
+  // token together with its qualifier so a mere conduit ("ilmavesilämpöpumppuvalmius")
+  // or a decommissioned boiler ("öljylämmitys purettu") isn't recorded as the heating,
+  // which would let a summer cabin read as year-round.
+  s = s
+    .replace(/[a-z]*lampopumppu(valmius|varaus)/g, " ")
+    .replace(/(oljy|maalampo|kaukolampo|sahko|[a-z]*lampo)(valmius|varaus)/g, " ")
+    .replace(/(oljy\w*|maalampo\w*|kaukolampo\w*|[a-z]*lampopumppu\w*)\s+\w*\s*(purett|poistett)\w*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (s === "") return null;
   if (/kaukolampo/.test(s)) return "kaukolampo";
   if (/maalampo/.test(s)) return "maalampo";
