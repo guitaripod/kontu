@@ -15,7 +15,15 @@ cfg = tomllib.load(open(os.path.expanduser("~/.config/kontu/config.toml"), "rb")
 SERVER, TOKEN = cfg["server_url"], cfg["api_token"]
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 COUNTRIES = ("SE", "NO", "DK", "IS")
-OVERPASS = "https://overpass-api.de/api/interpreter"
+# Several public Overpass mirrors — any one throttles under load (and stays blocked
+# for hours), so rotate: a query that fails on one is retried on the next. The order
+# is shuffled per run so we don't always lean on the same instance first.
+OVERPASS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.osm.ch/api/interpreter",
+]
+random.shuffle(OVERPASS)
 
 
 def api_get(path):
@@ -40,19 +48,32 @@ def api_post(path, payload):
     return out
 
 
+def overpass(q):
+    """Run an Overpass query across the mirrors; return elements or None if all fail."""
+    for ep in OVERPASS:
+        try:
+            r = subprocess.run(["curl", "-s", "-m", "30", "-X", "POST", "--data", f"data={q}", ep],
+                               capture_output=True, text=True, timeout=40)
+            if r.returncode == 0 and r.stdout:
+                body = json.loads(r.stdout)
+                # Overpass signals a soft failure with a `remark` + empty/absent elements;
+                # that is NOT "no water" — fall through to the next mirror, don't poison.
+                if "elements" not in body or (body.get("remark") and not body["elements"]):
+                    continue
+                return body["elements"]
+        except Exception:
+            continue
+    return None
+
+
 def shore_of(lat, lon):
-    """(shore, water_body) or None when the Overpass query itself failed."""
+    """(shore, water_body) or None when every Overpass mirror failed."""
     q = (f"[out:json][timeout:20];("
          f'way["natural"="water"](around:150,{lat},{lon});'
          f'relation["natural"="water"](around:150,{lat},{lon});'
          f'way["natural"="coastline"](around:400,{lat},{lon}););out tags 1;')
-    r = subprocess.run(["curl", "-s", "-m", "30", "-X", "POST", "--data", f"data={q}", OVERPASS],
-                       capture_output=True, text=True, timeout=40)
-    if r.returncode != 0 or not r.stdout:
-        return None
-    try:
-        els = json.loads(r.stdout).get("elements", [])
-    except Exception:
+    els = overpass(q)
+    if els is None:
         return None
     coast = any(e.get("tags", {}).get("natural") == "coastline" for e in els)
     water = next((e for e in els if e.get("tags", {}).get("natural") == "water"), None)
@@ -65,16 +86,24 @@ def shore_of(lat, lon):
     return ("ei_rantaa", None)
 
 
-pending = []
+lanes = {}
 for ctry in COUNTRIES:
     data = api_get(f"/api/listings?country={ctry}&limit=400")
-    for l in data.get("listings", []):
-        if l.get("lat") is not None and l.get("lon") is not None and not l.get("shore"):
-            pending.append(l)
-# Freshest first: a brand-new ingest gets classified before the long backlog tail, and
-# the partial work survives if Overpass starts throttling partway through.
-pending.sort(key=lambda l: l.get("last_seen") or l.get("id") or 0, reverse=True)
-print(f"listings needing shore (coords, no shore): {len(pending)}", flush=True)
+    rows = [l for l in data.get("listings", [])
+            if l.get("lat") is not None and l.get("lon") is not None and not l.get("shore")]
+    # Freshest within a country first, so a brand-new ingest is classified before its tail.
+    rows.sort(key=lambda l: l.get("last_seen") or l.get("id") or 0, reverse=True)
+    lanes[ctry] = rows
+# Round-robin across countries so no single market's backlog (e.g. Denmark's hundreds)
+# starves the smaller ones (Norway's handful) — every market makes steady progress.
+pending, its = [], {c: iter(v) for c, v in lanes.items()}
+while its:
+    for c in [c for c in COUNTRIES if c in its]:
+        try:
+            pending.append(next(its[c]))
+        except StopIteration:
+            del its[c]
+print(f"listings needing shore: {len(pending)} {{{', '.join(f'{c}:{len(v)}' for c, v in lanes.items())}}}", flush=True)
 
 
 def flush(batch):

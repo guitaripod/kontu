@@ -159,6 +159,8 @@ api.post("/enrich-shores", async (c) => {
 /// -limited by the public Overpass API under load, so the residential radar (whose IP
 /// Overpass serves freely) can run the same geometric detection and post results here.
 /// Only touches shore/water_body — never the source fields. Token-guarded.
+const SHORE_VALUES = new Set(["oma_ranta", "ei_rantaa", "rantaoikeus", "water_view"]);
+
 api.post("/set-shore", async (c) => {
   const body = await c.req
     .json<{ updates?: Array<{ id?: number; shore?: string; water_body?: string | null }> }>()
@@ -166,11 +168,15 @@ api.post("/set-shore", async (c) => {
   const updates = body?.updates ?? [];
   let updated = 0;
   for (const u of updates) {
-    if (!Number.isInteger(u.id) || typeof u.shore !== "string") continue;
-    await c.env.DB.prepare("UPDATE listings SET shore = ?, water_body = ? WHERE id = ?")
+    // Validate the verdict, and only ever FILL a missing shore — never overwrite an
+    // existing (possibly portal-authoritative) value, so a stray client can't poison it.
+    if (!Number.isInteger(u.id) || typeof u.shore !== "string" || !SHORE_VALUES.has(u.shore)) continue;
+    const res = await c.env.DB.prepare(
+      "UPDATE listings SET shore = ?, water_body = ? WHERE id = ? AND shore IS NULL",
+    )
       .bind(u.shore, u.water_body ?? null, u.id)
       .run();
-    updated++;
+    if (res.meta.changes > 0) updated++;
   }
   return c.json({ ok: true, updated });
 });

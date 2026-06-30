@@ -50,7 +50,30 @@ export interface TravelTimes {
   transit_to_town_min: number | null;
 }
 
-const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
+// Several public Overpass mirrors. Any one rate-limits a busy egress IP (and stays
+// blocked for hours), so a query that fails on one falls through to the next.
+const OVERPASS_URLS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+  "https://overpass.osm.ch/api/interpreter",
+];
+
+/** POST an Overpass query across the mirrors; the first 2xx response wins, else null. */
+async function overpassFetch(body: string): Promise<Response | null> {
+  for (const url of OVERPASS_URLS) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain", Accept: "application/json" },
+        body,
+      });
+      if (res.ok) return res;
+    } catch {
+      /* mirror unreachable — try the next */
+    }
+  }
+  return null;
+}
 const PELIAS_URL =
   "https://avoin-paikkatieto.maanmittauslaitos.fi/geocoding/v2/pelias/search";
 
@@ -172,14 +195,16 @@ async function shoreFromOsm(lat: number, lon: number): Promise<ShoreProbe> {
       `way["natural"="water"](around:150,${lat},${lon});` +
       `relation["natural"="water"](around:150,${lat},${lon});` +
       `way["natural"="coastline"](around:400,${lat},${lon}););out tags 1;`;
-    const res = await fetch(OVERPASS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain", Accept: "application/json" },
-      body: q,
-    });
-    if (!res.ok) return { ok: false };
-    const body = (await res.json()) as { elements?: Array<{ tags?: Record<string, string> }> };
-    const els = body.elements ?? [];
+    const res = await overpassFetch(q);
+    if (!res) return { ok: false };
+    const body = (await res.json()) as { elements?: Array<{ tags?: Record<string, string> }>; remark?: string };
+    // Overpass signals a soft failure (timeout / out-of-memory) with a `remark` and an
+    // empty/absent `elements` — that is NOT "no water nearby". Treat it as a failed probe
+    // (leave the shore pending) instead of poisoning the listing as shoreless.
+    if (body.elements == null || (body.remark != null && (body.elements?.length ?? 0) === 0)) {
+      return { ok: false };
+    }
+    const els = body.elements;
     const coast = els.some((e) => e.tags?.natural === "coastline");
     const firstWater = els.find((e) => e.tags?.natural === "water");
     if (firstWater) {
@@ -227,12 +252,8 @@ async function nearestServices(lat: number, lon: number): Promise<Partial<Neares
   ).join("\n");
   const query = `[out:json][timeout:25];(${blocks});out body center;`;
   try {
-    const res = await fetch(OVERPASS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain", Accept: "application/json" },
-      body: query,
-    });
-    if (!res.ok) return out;
+    const res = await overpassFetch(query);
+    if (!res) return out;
     const body = (await res.json()) as { elements?: OverpassElement[] };
     const elements = body.elements ?? [];
     for (const q of SERVICE_QUERIES) {
@@ -285,12 +306,8 @@ async function distanceToWater(lat: number, lon: number): Promise<number | null>
     const query =
       `[out:json][timeout:25];(way["natural"="water"](around:5000,${lat},${lon});` +
       `relation["natural"="water"](around:5000,${lat},${lon}););out center 1;`;
-    const res = await fetch(OVERPASS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain", Accept: "application/json" },
-      body: query,
-    });
-    if (!res.ok) return null;
+    const res = await overpassFetch(query);
+    if (!res) return null;
     const body = (await res.json()) as { elements?: OverpassElement[] };
     let best: number | null = null;
     for (const el of body.elements ?? []) {
