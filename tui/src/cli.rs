@@ -1001,12 +1001,15 @@ async fn watch_run(a: WatchRunArgs, client: &KontuClient, json: bool) -> Result<
     // signal) drops the bug-ridden and leads with the least buggy, so it needs spare
     // candidates to choose from — the ranker can't see bug pressure to pre-pick them.
     const OUTLIER_LIMIT: usize = 24;
-    let ranked: Vec<_> = crate::matching::rank(&spec, live, &defaults)
+    let ranked = crate::matching::rank(&spec, live, &defaults);
+    let (outliers, matches): (Vec<_>, Vec<_>) = ranked.into_iter().partition(|m| m.value_outlier);
+    // The fit floor narrows ALERTS — it gates the gate/near-miss/pin set only. It must NOT
+    // prune the value-outlier showcase, which is explicitly the "what's possible" lane and
+    // is bounded separately by select_outliers. A pin is never dropped by a fit floor.
+    let mut matches: Vec<_> = matches
         .into_iter()
-        .filter(|m| m.score >= fit_floor)
+        .filter(|m| m.pinned || m.score >= fit_floor)
         .collect();
-    let (outliers, mut matches): (Vec<_>, Vec<_>) =
-        ranked.into_iter().partition(|m| m.value_outlier);
     matches.extend(select_outliers(outliers, OUTLIER_LIMIT));
 
     let mut seen = watch::load_seen()?;

@@ -283,10 +283,11 @@ fn is_not_a_dwelling(l: &Listing, desc: &str) -> bool {
     ) {
         return true;
     }
-    // A leisure-classed listing with a trivial dwelling footprint is a shed / plot,
-    // not a year-round home.
+    // A leisure-classed listing with a trivial dwelling footprint is a shed / sauna /
+    // plot, not a year-round home. 20 m² clears the shed-and-studio band while leaving
+    // genuine small cottages (which start around 25 m²) intact.
     matches!(property_family(l.property_type.as_deref().unwrap_or("")), "leisure" | "plot")
-        && l.living_area_m2.map(|a| a < 15.0).unwrap_or(false)
+        && l.living_area_m2.map(|a| a < 20.0).unwrap_or(false)
 }
 
 /// Clearly more than one living floor — for the single-storey hard filter.
@@ -374,6 +375,31 @@ fn winter_signal(l: &Listing, desc: &str) -> f64 {
         return 0.7;
     }
     0.4
+}
+
+/// STRUCTURED proof that a place is genuinely year-round — a real heating plant, or an
+/// explicit/official conversion to permanent residential use. A lone positive adjective
+/// in the sales copy ("vinterbonad" / "talviasuttava") is marketing, not proof: it can
+/// lift the winter SCORE but must not, on its own, lift a leisure cabin to the GATE
+/// (the Telegram-alert tier). A detached house is year-round by type and bypasses this.
+fn winter_structurally_confirmed(l: &Listing, desc: &str) -> bool {
+    let real_heat = l
+        .heating_type
+        .as_deref()
+        .map(|h| {
+            h.contains("kaukolämp")
+                || h.contains("maalämp")
+                || h.contains("öljy")
+                || h.contains("ivlp")
+                || h.contains("ilmavesi")
+        })
+        .unwrap_or(false);
+    real_heat
+        || has(desc, &[
+            "asuinkäyttöön muut", "vakituiseksi muut", "muutettu vakituise", "muutettu asuinkäyt",
+            "ombyggd till åretrunt", "godkänd som åretrunt", "godkänt för åretrunt",
+            "omgjort til helår", "godkjent for helår",
+        ])
 }
 
 /// Structural condition: 1.0 = move-in/renovated, ~0.2 = needs major work.
@@ -690,12 +716,17 @@ fn is_value_outlier(spec: &Spec, l: &Listing, s: &Signals, risk: u32) -> bool {
 /// caller only invokes this when the gate's confirmation checks failed).
 fn gate_caveats(spec: &Spec, l: &Listing, s: &Signals) -> Vec<String> {
     let mut out = Vec::new();
-    let has_evidence = l.description.as_deref().map(|d| d.len() >= 40).unwrap_or(false);
+    let desc = l.description.as_deref().unwrap_or("").to_lowercase();
+    let has_evidence = desc.len() >= 40;
     let is_house = property_family(l.property_type.as_deref().unwrap_or("")) == "house";
     if !has_evidence {
         out.push("card-only listing — condition & year-round use unverified".into());
-    } else if matches!(spec.winterized, Pref::Required) && s.winter < 0.85 && !is_house {
-        out.push("year-round use not stated — confirm with the seller".into());
+    }
+    if matches!(spec.winterized, Pref::Required) && !is_house && !winter_structurally_confirmed(l, &desc) {
+        out.push("year-round use not proven (no heating/conversion stated) — confirm with the seller".into());
+    }
+    if matches!(spec.condition, Pref::Required) && s.condition < 0.8 {
+        out.push("condition not confirmed (no kuntoluokka/build year/renovation) — verify before viewing".into());
     }
     if out.is_empty() {
         out.push("unconfirmed on a key requirement — verify before viewing".into());
@@ -749,6 +780,7 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
             continue;
         }
         let s = signals(&l);
+        let desc = l.description.as_deref().unwrap_or("").to_lowercase();
         let pinned = spec.pinned.contains(&l.id);
         let passes_struct = passes_structural(spec, &l);
         let passes = passes_struct && passes_preferences(spec, &l, &s);
@@ -775,32 +807,41 @@ pub fn rank(spec: &Spec, listings: Vec<Listing>, defaults: &CostDefaults) -> Vec
         // Card-only listings (e.g. Swedish Booli, whose detail pages bot-block) can
         // never false-alert as perfect; they surface as candidates for review instead.
         let has_evidence = l.description.as_deref().map(|d| d.len() >= 40).unwrap_or(false);
-        // For a GATE (Telegram-alert "perfect match"), a LEISURE cottage must have its
-        // year-round use explicitly confirmed — a detached house is year-round by type,
-        // but a cabin defaulting to "maybe winterized" is a candidate, not a confirmed
-        // match. (Condition still uses the spec's own threshold via passes_preferences.)
+        let is_house = property_family(l.property_type.as_deref().unwrap_or("")) == "house";
+        // For a GATE (Telegram-alert "perfect match") every REQUIRED soft preference must
+        // be positively CONFIRMED, not merely above the spec's acceptance floor:
+        //  - winter: a detached house is year-round by type; a LEISURE cabin needs
+        //    STRUCTURED proof (real heating / official conversion) — a lone marketing
+        //    adjective is not confirmation.
+        //  - condition: an UNKNOWN-condition home defaults to 0.55, which clears the 0.5
+        //    Required floor but proves nothing. The gate needs a confirmed-good reading
+        //    (>=0.8: modern build, kuntoluokka hyvä/erinomainen, or explicit renovation).
+        // A listing that passes every preference yet misses one of these confirmations is
+        // a DEMOTED GATE — a strong candidate, never an alert.
         let winter_confirmed = !matches!(spec.winterized, Pref::Required)
-            || s.winter >= 0.85
-            || property_family(l.property_type.as_deref().unwrap_or("")) == "house";
+            || is_house
+            || winter_structurally_confirmed(&l, &desc);
+        let condition_confirmed = !matches!(spec.condition, Pref::Required) || s.condition >= 0.8;
         let within_gate = passes
             && has_evidence
             && winter_confirmed
+            && condition_confirmed
             && spec.max_risk.map(|m| assessment.score <= m).unwrap_or(true);
         let within_near = passes
             && !within_gate
             && confirmed_sound(&l)
             && spec.near_miss_risk.map(|n| assessment.score <= n).unwrap_or(false);
-        // The candidate lane catches two kinds of real home that aren't a confirmed
-        // gate: a genuinely off-spec find (fails a preference) AND a "demoted gate" —
-        // one that passes every hard criterion but can't be CONFIRMED as perfect (a
-        // card-only row, or a cabin whose year-round use is merely plausible). Both are
-        // worth the buyer's eyes; neither may ever fire the Telegram alert.
+        // The candidate lane catches two kinds of real home that aren't a confirmed gate:
+        // a DEMOTED GATE (passes every preference but couldn't be confirmed as perfect),
+        // and a genuinely off-spec find (fails a preference) that's still a value outlier.
+        // A demoted gate must surface on its own merit — it needs NO discount signal, or a
+        // real home with no fairness benchmark would vanish from every lane.
+        let demoted_gate = passes && !within_gate && !within_near;
         let candidate_outlier = !pinned
             && !within_gate
             && !within_near
             && passes_struct
-            && valueish
-            && is_value_outlier(spec, &l, &s, assessment.score);
+            && (demoted_gate || (valueish && is_value_outlier(spec, &l, &s, assessment.score)));
         let off_spec = if candidate_outlier {
             let mut r = off_spec_reasons(spec, &l, &s);
             // A demoted gate passes every preference, so it has no off-spec reason —
@@ -1312,6 +1353,90 @@ mod tests {
             scored.iter().all(|s| s.near_miss || s.value_outlier || s.pinned),
             "a card-only listing must never be a confirmed GATE match"
         );
+    }
+
+    fn gate_spec() -> Spec {
+        Spec {
+            shore: Pref::Required, winterized: Pref::Required, condition: Pref::Required,
+            max_risk: Some(25), near_miss_risk: Some(50), price_max: Some(120_000), cash: true,
+            property_types: vec!["omakotitalo".into(), "mökki".into()], ..Default::default()
+        }
+    }
+    fn tier_of(s: &Scored) -> &'static str {
+        if s.pinned { "pin" } else if s.value_outlier { "outlier" }
+        else if s.near_miss { "near_miss" } else { "gate" }
+    }
+
+    #[test]
+    fn unknown_condition_home_cannot_gate() {
+        // condition_class=None AND year_built=None → condition signal 0.55, which clears the
+        // 0.5 Required floor but proves NOTHING. A filler description must not let it fire the
+        // "confirmed perfect match" alert — it demotes to a candidate.
+        let defaults = CostDefaults::default();
+        let l = Listing {
+            id: 1, country: Some("FI".into()), property_type: Some("omakotitalo".into()),
+            shore: Some("oma_ranta".into()), price_eur: Some(80_000), living_area_m2: Some(90.0),
+            condition_class: None, year_built: None,
+            description: Some("Talo myynnissä järven rannalla, tervetuloa katsomaan!".into()),
+            ..Default::default()
+        };
+        let scored = rank(&gate_spec(), vec![l], &defaults);
+        assert_eq!(scored.len(), 1, "the home must still surface — just not as a gate");
+        assert_ne!(tier_of(&scored[0]), "gate", "unknown-condition home must not gate");
+    }
+
+    #[test]
+    fn lone_winter_keyword_cannot_gate_a_leisure_cabin() {
+        // A leisure cabin with a single marketing word ("vinterbonad") and no structured
+        // heating/conversion evidence must NOT reach the gate — only the candidate lane.
+        let defaults = CostDefaults::default();
+        let l = Listing {
+            id: 1, country: Some("SE".into()), property_type: Some("fritidshus".into()),
+            shore: Some("oma_ranta".into()), price_eur: Some(70_000), living_area_m2: Some(80.0),
+            condition_class: Some("hyvä".into()), year_built: Some(2016),
+            description: Some("Mysig stuga vid sjön, vinterbonad, egen strand här! Välkommen.".into()),
+            ..Default::default()
+        };
+        let scored = rank(&gate_spec(), vec![l], &defaults);
+        assert!(!scored.is_empty(), "the cabin must still surface as a candidate");
+        assert_ne!(tier_of(&scored[0]), "gate", "lone marketing keyword must not confirm a gate");
+    }
+
+    #[test]
+    fn leisure_cabin_with_structured_winter_and_good_condition_gates() {
+        // The positive control: real heating + kuntoluokka hyvä + own shore IS a confirmed
+        // perfect match, so it MUST gate — the tightening only blocks unproven cabins.
+        let defaults = CostDefaults::default();
+        let l = Listing {
+            id: 1, country: Some("FI".into()), property_type: Some("mökki".into()),
+            shore: Some("oma_ranta".into()), price_eur: Some(90_000), living_area_m2: Some(70.0),
+            condition_class: Some("hyvä".into()), year_built: Some(2008),
+            heating_type: Some("maalämpö".into()),
+            description: Some("Talviasuttava mökki omalla järvenrannalla, maalämpö, hyväkuntoinen.".into()),
+            ..Default::default()
+        };
+        let scored = rank(&gate_spec(), vec![l], &defaults);
+        assert_eq!(scored.len(), 1);
+        assert_eq!(tier_of(&scored[0]), "gate", "a structurally-confirmed year-round mökki must gate");
+    }
+
+    #[test]
+    fn demoted_gate_without_a_value_signal_still_surfaces() {
+        // A real home that passes EVERY preference but can't be confirmed (e.g. unconfirmed
+        // condition) and has no fairness benchmark must NOT vanish — it surfaces as a
+        // candidate with a caveat. Regression for the "demoted gate falls through every lane".
+        let defaults = CostDefaults::default();
+        let l = Listing {
+            id: 1, country: Some("FI".into()), property_type: Some("mökki".into()),
+            shore: Some("oma_ranta".into()), price_eur: Some(115_000), living_area_m2: Some(75.0),
+            condition_class: None, year_built: Some(1992), heating_type: Some("maalämpö".into()),
+            description: Some("Talviasuttava mökki omalla järvenrannalla, maalämpö lämmitys.".into()),
+            ..Default::default()
+        };
+        let scored = rank(&gate_spec(), vec![l], &defaults);
+        assert_eq!(scored.len(), 1, "a passing-but-unconfirmed home must not be dropped");
+        assert_eq!(tier_of(&scored[0]), "outlier", "it surfaces as a candidate, not a gate");
+        assert!(!scored[0].off_spec.is_empty(), "and it explains what to verify");
     }
 
     #[test]
