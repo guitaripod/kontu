@@ -597,6 +597,11 @@ function pointInRing(ring: number[][], x: number, y: number): boolean {
  * total failure; `partial` when one source was unreachable.
  */
 export async function bugPressure(lat: number, lon: number, mmlKey?: string): Promise<BugPressure | null> {
+  // Every habitat input (CLC, MML mire, watercourse) is a Finnish dataset on the TM35FIN
+  // grid. Outside Finland they don't error — they return empty/zero — which would publish
+  // a CONFIDENT "matala" (low bug) rating that was never measured, and the value lane ranks
+  // on it, handing non-FI candidates a fabricated advantage. Refuse coords outside Finland.
+  if (lat < 59.0 || lat > 70.5 || lon < 19.0 || lon > 31.7) return null;
   const { E, N } = wgs84ToTm35fin(lat, lon);
   const [clc, water, mmlMire] = await Promise.all([
     clcHabitat(E, N),

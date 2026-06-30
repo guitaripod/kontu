@@ -42,7 +42,7 @@ const DEFAULT_SOURCES = [
   "etuovi:omakotitalo:liperi",
 ] as const;
 
-const MAX_PHOTOS_PER_TICK = 24;
+const MAX_PHOTOS_PER_TICK = 6;
 const PAGE_SIZE = 24;
 
 export interface CrawlTickResult {

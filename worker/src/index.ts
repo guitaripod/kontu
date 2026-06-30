@@ -172,12 +172,12 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 async function runScheduled(env: Env): Promise<void> {
-  // Drain several crawl pages of the open-API portals (DK Boligsiden, IS visir)
-  // per run, not just one, so they refresh in days rather than weeks. Each tick
-  // is one source/page and stops early when there's nothing queued.
-  // Once a day, so do a generous batch: drain up to 10 crawl pages (open-API DK/IS)
-  // and 25 shore-checks per run. Stops early when nothing is queued.
-  for (let i = 0; i < 10; i++) {
+  // Drain a few crawl pages of the open-API portals (DK Boligsiden, IS visir) per run.
+  // Bounded: each tick fetches one page + up to MAX_PHOTOS_PER_TICK photos, and Cloudflare
+  // caps subrequests per invocation — 10 ticks × 24 photos blew that cap and wedged whole
+  // DK regions / IS postcodes in a permanent error state. 3 ticks keeps us well under while
+  // still draining in days; the cron runs daily so it catches up. Stops early when idle.
+  for (let i = 0; i < 3; i++) {
     try {
       const r = await crawlTick(env.DB, env.PHOTOS);
       if (!r.source) break;
