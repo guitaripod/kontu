@@ -15,6 +15,7 @@
 import { getSourceConfig } from "../db";
 import {
   asciiFold,
+  extractRiskStructures,
   normalizeCountry,
   toNumber,
   type NormalizedListing,
@@ -92,7 +93,12 @@ export async function fetchVisirPage(db: D1Database, q: VisirQuery): Promise<Vis
       const listings: NormalizedListing[] = [];
       for (const card of cards) {
         const row = normalizeVisirCard(card, fx);
-        if (row.portal_listing_id !== "") listings.push(row);
+        // Drop non-homes: commercial premises and horse stables map to a null type, and
+        // bare plots aren't a dwelling — none should be ingested as a house listing (a
+        // null-type hesthús was producing a full €0 cost breakdown).
+        if (row.portal_listing_id !== "" && row.property_type != null && row.property_type !== "plot") {
+          listings.push(row);
+        }
       }
       return { listings, found: extractFound(body, listings.length), ok: true };
     } catch (err) {
@@ -259,7 +265,7 @@ function normalizeVisirCard(card: unknown, fx: number): NormalizedListing {
     roof_material: null,
     energy_class: null,
     e_value: null,
-    risk_structures: [],
+    risk_structures: extractRiskStructures(firstString(c["description"], c["lysing"]), "IS"),
 
     plot_ownership: null,
     lease_end_year: null,

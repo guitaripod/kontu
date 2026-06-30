@@ -282,7 +282,13 @@ export function normalizeEnergyClass(raw: unknown): string | null {
   return m ? (m[1] ?? null) : null;
 }
 
-const RISK_TOKENS: Array<[RegExp, string]> = [
+// Risk-structure tokens scanned PER COUNTRY, matched against the ascii-folded text and
+// emitting the canonical token the Rust RiskModel gates on (tui/src/risk.rs). Each
+// country's signature pathology has its own vocabulary; without these the SE/NO/DK/IS
+// pathology flags are unreachable. (The era-only flags — NO wood-rot, IS ASR — need no
+// token, only year_built.) The shared moisture/asbestos/drainage tokens map to the FI
+// canonical names so the shared flags fire cross-Nordic too.
+const RISK_TOKENS_FI: Array<[RegExp, string]> = [
   [/valesokkeli|vale-?sokkeli/, "valesokkeli"],
   [/kaksoislaatta|kaksois-?laatta/, "kaksoislaatta"],
   [/kosteusvaurio|kosteus-?vaurio/, "kosteusvaurio"],
@@ -295,13 +301,48 @@ const RISK_TOKENS: Array<[RegExp, string]> = [
   [/kattovuoto|vesivahinko|vesivaurio/, "vesivaurio"],
   [/oljysailio|oljysaili/, "oljysailio"],
 ];
+const RISK_TOKENS_SE: Array<[RegExp, string]> = [
+  [/enstegst|enstegs|putsfasad|putsad fasad/, "enstegs"],
+  [/putsad/, "putsad"],
+  [/blabetong|bla-?betong|gasbetong/, "blabetong"],
+  [/radon/, "radon"],
+  [/fukt|fuktskad|mogel|mogelskad/, "kosteusvaurio"],
+  [/asbest/, "asbesti"],
+  [/dranering|dranerad/, "salaoja"],
+];
+const RISK_TOKENS_NO: Array<[RegExp, string]> = [
+  [/pusset|pussfasade|\betics\b|render/, "puss"],
+  [/rateskad|\brate\b|muggsopp|soppskad/, "homevaurio"],
+  [/fuktskad|\bfukt\b/, "kosteusvaurio"],
+  [/asbest/, "asbesti"],
+  [/drenering|drenert/, "salaoja"],
+];
+const RISK_TOKENS_DK: Array<[RegExp, string]> = [
+  [/\bmgo\b|magnesiumoxid|magnesium/, "mgo"],
+  [/fugt|skimmel|fugtskad/, "kosteusvaurio"],
+  [/asbest|eternit/, "asbesti"],
+  [/draen|draenering/, "salaoja"],
+];
+const RISK_TOKENS_IS: Array<[RegExp, string]> = [
+  [/jardskjalft|seismic/, "seismic"],
+  [/alkaliv|steypuskemmd|\basr\b/, "alkali"],
+  [/\braki\b|mygla|rakaskemmd/, "kosteusvaurio"],
+];
+const RISK_TOKENS_BY_COUNTRY: Record<string, Array<[RegExp, string]>> = {
+  FI: RISK_TOKENS_FI,
+  SE: RISK_TOKENS_SE,
+  NO: RISK_TOKENS_NO,
+  DK: RISK_TOKENS_DK,
+  IS: RISK_TOKENS_IS,
+};
 
-/** Scan free text for known Finnish risk-structure tokens. Order-stable, deduped. */
-export function extractRiskStructures(text: unknown): string[] {
+/** Scan free text for that country's risk-structure tokens. Order-stable, deduped. */
+export function extractRiskStructures(text: unknown, country: string = "FI"): string[] {
   const s = asciiFold(text);
   if (s === "") return [];
+  const table = RISK_TOKENS_BY_COUNTRY[(country ?? "FI").toUpperCase()] ?? RISK_TOKENS_FI;
   const found: string[] = [];
-  for (const [re, token] of RISK_TOKENS) {
+  for (const [re, token] of table) {
     if (re.test(s) && !found.includes(token)) {
       found.push(token);
     }
@@ -406,7 +447,12 @@ export function coerceNormalized(raw: Record<string, unknown>): NormalizedListin
     roof_material: s("roof_material"),
     energy_class: s("energy_class"),
     e_value: n("e_value"),
-    risk_structures: Array.isArray(raw.risk_structures) ? (raw.risk_structures as string[]) : [],
+    // A residential ingester may send risk_structures explicitly; otherwise mine them
+    // from the description in THIS listing's country, so a Swedish "blåbetong" or a
+    // Norwegian "råteskade" actually reaches the matching country's RiskModel.
+    risk_structures: Array.isArray(raw.risk_structures)
+      ? (raw.risk_structures as string[])
+      : extractRiskStructures(s("description"), normalizeCountry(s("country")) ?? "FI"),
     plot_ownership: s("plot_ownership"),
     lease_end_year: n("lease_end_year"),
     shore: s("shore"),

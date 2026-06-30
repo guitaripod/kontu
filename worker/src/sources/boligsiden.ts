@@ -10,6 +10,7 @@
 import { getSourceConfig } from "../db";
 import {
   asciiFold,
+  extractRiskStructures,
   normalizeCountry,
   normalizeEnergyClass,
   type NormalizedListing,
@@ -227,7 +228,7 @@ function normalizeBoligsidenCard(card: unknown): NormalizedListing {
     roof_material: mapRoofMaterial(building?.["roofingMaterial"]),
     energy_class: mapEnergyClass(c),
     e_value: null,
-    risk_structures: [],
+    risk_structures: extractRiskStructures(description, "DK"),
 
     plot_ownership: null,
     lease_end_year: null,

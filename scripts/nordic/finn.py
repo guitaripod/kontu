@@ -65,22 +65,34 @@ for vert in ("leisuresale","homes"):
 seen={r["portal_listing_id"]:r for r in cheap}; cheap=list(seen.values())
 print(f"\nNO cheap (<=100k EUR) houses: {len(cheap)}")
 
-# FINN search cards carry no coordinates; the per-ad detail page embeds them in the
-# static-map URL (lat=..&lon=..). Pull them so the Worker's geometric shore detection
-# (OSM Overpass on lat/lon) can find Norway's lake/fjord shores — without coords a NO
-# listing can never surface as a waterfront candidate. Best-effort + paced to stay
-# human; a miss leaves coords null and the COALESCE upsert keeps any prior value.
-def detail_coords(url):
-    h=fetch(url).replace('\\u0026','&')
-    m=re.search(r'lat=(-?\d+\.\d+)&lon=(-?\d+\.\d+)&zoom=', h)
-    return (float(m.group(1)), float(m.group(2))) if m else (None, None)
+# FINN search cards carry almost nothing structured; the per-ad detail page has the
+# coordinates (in the static-map URL lat=..&lon=..) AND the build year, tenure and plot
+# ownership — the fields the matcher gate (leased-plot) and the risk model (era flags)
+# need but that are null on the card. One detail fetch per listing pulls them all.
+# Best-effort + paced to stay human; a miss leaves a field null and COALESCE keeps prior.
+def detail_fields(url):
+    raw=fetch(url).replace('\\u0026','&')
+    out={}
+    mc=re.search(r'lat=(-?\d+\.\d+)&lon=(-?\d+\.\d+)&zoom=', raw)
+    if mc: out["lat"],out["lon"]=float(mc.group(1)),float(mc.group(2))
+    text=re.sub(r'\s+',' ',re.sub(r'<[^>]+>',' ',raw))
+    my=re.search(r'Byggeår\s+((?:18|19|20)\d{2})', text)
+    if my: out["year_built"]=int(my.group(1))
+    me=re.search(r'Eieform\s+([A-Za-zæøåÆØÅ]+)', text)
+    if me:
+        t=me.group(1).lower()
+        out["holding_form"]="asunto_osake" if any(x in t for x in ("andel","aksje","borett")) else "kiinteisto"
+    mt=re.search(r'Tomteareal\b.{0,40}?\((eiet|festet)\)', text)
+    if mt: out["plot_ownership"]="vuokra" if mt.group(1)=="festet" else "oma"
+    return out
 got=0
 for r in cheap:
-    lat,lon=detail_coords(r["url"])
-    if lat is not None:
-        r["lat"],r["lon"]=lat,lon; got+=1
+    f=detail_fields(r["url"])
+    if f.get("lat") is not None: got+=1
+    for k in ("lat","lon","year_built","holding_form","plot_ownership"):
+        if f.get(k) is not None: r[k]=f[k]
     time.sleep(1.0+random.random())
-print(f"  geocoded {got}/{len(cheap)} from detail pages")
+print(f"  enriched {got}/{len(cheap)} from detail pages (coords/year/tenure/plot)")
 def post(ls):
     json.dump({"listings":ls},open("/tmp/finn_post.json","w"))
     return subprocess.run(["curl","-s","-m","60","-X","POST","-H",f"Authorization: Bearer {TOKEN}",
