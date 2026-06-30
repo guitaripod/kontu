@@ -80,10 +80,7 @@ impl CostState {
             self.price = p as f64;
         }
         self.debt_free_price = l.debt_free_price_eur.map(|v| v as f64).unwrap_or(self.price);
-        self.holding_form = match l.holding_form.as_deref() {
-            Some(h) if h.contains("osake") => HoldingForm::AsuntoOsake,
-            _ => HoldingForm::Kiinteisto,
-        };
+        self.holding_form = parse_holding_form(l.holding_form.as_deref());
         self.heating = l.heating_enum();
         self.water = match l.water_supply.as_deref() {
             Some(w) if w.contains("kaivo") || w.contains("kanto") => WaterSupply::Well,
@@ -148,6 +145,32 @@ impl CostState {
     }
 }
 
+/// Share/co-op ownership vs real-property (freehold). The distinction is the master
+/// switch for acquisition cost — a share pays NO deed/transfer tax (FI asunto-osake,
+/// SE bostadsrätt, DK andelsbolig, NO borettslag/aksjeleilighet) — so it must recognize
+/// every Nordic market's vocabulary, not just the Finnish "osake". Whatever token an
+/// ingester leaks through (canonical "asunto_osake" or a raw "andel"/"bostadsrätt") is
+/// caught here, so a single robust consumer beats per-ingester normalization.
+fn parse_holding_form(raw: Option<&str>) -> HoldingForm {
+    match raw {
+        Some(h) => {
+            let h = h.to_lowercase();
+            let is_share = h.contains("osake") // FI asunto-osake
+                || h.contains("andel") // DK andelsbolig, NO andel
+                || h.contains("bostadsr") // SE bostadsrätt
+                || h.contains("borettslag") // NO borettslag
+                || h.contains("aksje") // NO aksjeleilighet
+                || h.contains("share"); // generic English
+            if is_share {
+                HoldingForm::AsuntoOsake
+            } else {
+                HoldingForm::Kiinteisto
+            }
+        }
+        None => HoldingForm::Kiinteisto,
+    }
+}
+
 /// A mökki / loma property is taxed on the general (leisure) kiinteistövero band.
 fn is_leisure_listing(l: &Listing) -> bool {
     let leisure_type = l
@@ -161,4 +184,28 @@ fn is_leisure_listing(l: &Listing) -> bool {
         .map(|u| u.contains("loma"))
         .unwrap_or(false);
     leisure_type || leisure_use
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn share_ownership_recognized_across_the_nordics() {
+        // Every Nordic co-op vocabulary must read as a share (no real-property deed tax),
+        // not just the Finnish "osake" — else a DK andelsbolig is charged freehold duty.
+        for share in ["asunto_osake", "andel", "andelsbolig", "bostadsrätt", "borettslag", "aksjeleilighet"] {
+            assert!(
+                matches!(parse_holding_form(Some(share)), HoldingForm::AsuntoOsake),
+                "{share} should be a share/co-op"
+            );
+        }
+        for freehold in ["kiinteisto", "ejer", "ejerbolig", "selveier", "äganderätt"] {
+            assert!(
+                matches!(parse_holding_form(Some(freehold)), HoldingForm::Kiinteisto),
+                "{freehold} should be freehold"
+            );
+        }
+        assert!(matches!(parse_holding_form(None), HoldingForm::Kiinteisto));
+    }
 }

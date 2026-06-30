@@ -137,6 +137,7 @@ impl CostDefaults {
             // Stämpelskatt: 1.5% on freehold (fastighet/tomträtt); bostadsrätt none.
             transfer_tax_kiinteisto: 0.015,
             transfer_tax_osake: 0.0,
+            kuntotarkastus_eur: 885.0,       // överlåtelsebesiktning ~10,000 SEK (not the FI 1450)
             insurance_eur_yr: 560.0,         // villaförsäkring ~6,300 SEK
             heating_kaukolampo_eur_yr: 1650.0, // fjärrvärme ~18,500 SEK
             heating_maalampo_eur_yr: 1150.0,   // bergvärme ~13,000 SEK
@@ -166,6 +167,7 @@ impl CostDefaults {
             // Dokumentavgift: 2.5% on freehold (Selveier); co-op (Andel/Aksje) none.
             transfer_tax_kiinteisto: 0.025,
             transfer_tax_osake: 0.0,
+            kuntotarkastus_eur: 0.0,           // seller funds the mandatory tilstandsrapport (avhendingslova 2022) — no buyer survey
             insurance_eur_yr: 940.0,           // husforsikring ~10,500 NOK
             heating_kaukolampo_eur_yr: 1875.0, // fjernvarme ~21,000 NOK
             heating_maalampo_eur_yr: 1160.0,   // bergvarme ~13,000 NOK
