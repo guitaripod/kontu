@@ -51,9 +51,20 @@ def detail(url):
     return out
 
 
+# Only enrich real dwellings — visir's IS feed is dominated by farms (Jörð), bare plots
+# and commercial premises that the matcher drops anyway, so detail-fetching them wastes
+# the run. Capped per run; the daily radar drains the rest incrementally.
+DWELLINGS = {"detached_house", "detached", "apartment", "cottage", "semi_detached", "terraced_house", "leisure"}
+# visir rate-limits rapid sequential detail fetches from a residential IP (responses
+# slow to the curl timeout), so pace gently and cap per run — the daily radar drains
+# the rest over a few days, like the shore pass. Newest first via the API's default order.
+CAP = 40
 data = api_get("/api/listings?country=IS&limit=400")
-pending = [l for l in data.get("listings", []) if l.get("year_built") is None and l.get("url")]
-print(f"IS listings needing build year: {len(pending)}", flush=True)
+pending = [
+    l for l in data.get("listings", [])
+    if l.get("year_built") is None and l.get("url") and l.get("property_type") in DWELLINGS
+][:CAP]
+print(f"IS dwellings needing build year: {len(pending)}", flush=True)
 
 batch, ok, miss = [], 0, 0
 for l in pending:
@@ -63,10 +74,10 @@ for l in pending:
         ok += 1
     else:
         miss += 1
-    if len(batch) >= 25:
+    if len(batch) >= 10:
         print("  POST:", api_post("/api/enrich-listing", {"updates": batch}), flush=True)
         batch = []
-    time.sleep(1.0 + random.random() * 0.6)
+    time.sleep(2.5 + random.random() * 1.5)
 if batch:
     print("  POST:", api_post("/api/enrich-listing", {"updates": batch}), flush=True)
 print(f"enriched {ok}, no detail {miss}", flush=True)
