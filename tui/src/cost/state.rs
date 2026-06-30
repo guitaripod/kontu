@@ -114,7 +114,9 @@ impl CostState {
             arrangement_fee_eur: 0.0,
             moving_eur: 1000.0,
             inspection_eur: d.kuntotarkastus_eur,
-            mortgage_deeds: 1,
+            // A cash purchase registers no mortgage, so it owes no pantbrev / pantedokument
+            // / kiinnitys deed fee. Only charge a deed when there's actually a loan.
+            mortgage_deeds: if self.ltv > 0.0 { 1 } else { 0 },
             e_conveyance: false,
         };
         let property = PropertyInputs {

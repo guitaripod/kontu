@@ -214,6 +214,45 @@ api.post("/refresh-nordic-stats", async (c) => {
   return c.json({ ok: true, benchmarks: written });
 });
 
+/// Fill detail-page fields a residential enricher pulled off-box (build year, coords,
+/// plot ownership, tenure) for open portals whose search cards omit them (IS visir).
+/// COALESCE-style: only fills a currently-NULL field, never overwrites source data.
+api.post("/enrich-listing", async (c) => {
+  const body = await c.req
+    .json<{
+      updates?: Array<{
+        id?: number;
+        year_built?: number;
+        lat?: number;
+        lon?: number;
+        plot_ownership?: string;
+        holding_form?: string;
+      }>;
+    }>()
+    .catch(() => null);
+  const updates = body?.updates ?? [];
+  let updated = 0;
+  for (const u of updates) {
+    if (!Number.isInteger(u.id)) continue;
+    const res = await c.env.DB.prepare(
+      "UPDATE listings SET year_built = COALESCE(year_built, ?), lat = COALESCE(lat, ?), " +
+        "lon = COALESCE(lon, ?), plot_ownership = COALESCE(plot_ownership, ?), " +
+        "holding_form = COALESCE(holding_form, ?) WHERE id = ?",
+    )
+      .bind(
+        Number.isInteger(u.year_built) ? u.year_built : null,
+        typeof u.lat === "number" ? u.lat : null,
+        typeof u.lon === "number" ? u.lon : null,
+        typeof u.plot_ownership === "string" ? u.plot_ownership : null,
+        typeof u.holding_form === "string" ? u.holding_form : null,
+        u.id,
+      )
+      .run();
+    if (res.meta.changes > 0) updated++;
+  }
+  return c.json({ ok: true, updated });
+});
+
 /// List the listing ids currently on the public site (so the CLI can prune pages
 /// for listings that sold / left the showcase). Token-guarded like /publish.
 api.get("/published-ids", async (c) => {

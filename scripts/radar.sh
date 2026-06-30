@@ -26,6 +26,9 @@ python3 scripts/nordic/finn.py 2>&1 | tail -3 || log "NO ingest had errors (cont
 # cron, but the public Overpass API rate-limits Cloudflare's egress under load; the
 # residential IP is served freely, so this is the reliable place to classify fresh
 # coordinates into lake/coast shores before the match needs them.
+log "enriching Iceland build-year + coords (visir detail) ..."
+python3 scripts/nordic/visir_enrich.py 2>&1 | tail -3 || log "IS enrichment had errors (continuing)"
+
 log "detecting shores (Overpass, residential) ..."
 python3 scripts/nordic/shore.py 2>&1 | tail -3 || log "shore detection had errors (continuing)"
 
