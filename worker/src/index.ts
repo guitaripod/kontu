@@ -94,6 +94,10 @@ app.get("/h", (c) => c.redirect("/kontu", 301));
 app.get("/h/:id", (c) => c.redirect(`/kontu/${c.req.param("id")}`, 301));
 
 app.use("/api/*", async (c, next) => {
+  // Cover photos are public images — the public site embeds them as <img src>, which
+  // can't carry a bearer token. They expose nothing private (the same image is public
+  // on the portal), so the photo route is exempt from the write-API token guard.
+  if (c.req.path.startsWith("/api/photos/")) return next();
   const token = c.req.header("Authorization")?.replace(/^Bearer\s+/i, "");
   if (!token || token !== c.env.API_TOKEN) {
     return c.json({ error: "unauthorized" }, 401);

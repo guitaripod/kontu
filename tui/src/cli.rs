@@ -1402,7 +1402,19 @@ async fn publish_listing(
     apply_spec_financing(&mut cs);
     cs.horizon = horizon;
     let proj = cs.project(defaults);
-    let gallery = crate::ingest::fetch_gallery(&detail.listing.url).await;
+    // Finland's HD gallery is scraped from the Oikotie detail page at publish time. The
+    // other Nordic portals don't expose that, but their ingesters record a cover URL, so
+    // fall back to the stored photos served through the Worker's lazy R2 route — otherwise
+    // every cross-Nordic card publishes with a blank image.
+    let mut gallery = crate::ingest::fetch_gallery(&detail.listing.url).await;
+    if gallery.is_empty() {
+        let base = cfg.webapp_url.trim_end_matches('/');
+        gallery = detail
+            .photos
+            .iter()
+            .map(|p| format!("{base}/api/photos/{}", p.r2_key))
+            .collect();
+    }
     let payload = build_publish_payload(&detail, &assessment, &proj, &gallery, horizon, tier, &m.off_spec);
     client.publish_page(m.id, tier, payload).await?;
 
